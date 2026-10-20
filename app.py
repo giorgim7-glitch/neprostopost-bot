@@ -8,21 +8,31 @@ from threading import Thread
 from apscheduler.schedulers.background import BackgroundScheduler
 from werkzeug.utils import secure_filename
 import pytz
+import sqlite3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# --- НАСТРОЙКИ ---
 TOKEN = "f9LHodD0cOLMdTsqq6Aayvaoutp2PBcYlCKXPS7dEg83rYK5B88u3b-KlPiCuCsRPUmJ3Vl6ruCUgOSCqFig"
 BASE_URL = "https://platform-api2.max.ru"
 MY_CHAT_ID = 505757849 
 
-KNOWN_CHATS = []
-SCHEDULED_JOBS = []
-CATALOG = [] 
-
-# Создаем постоянную папку для загрузок (BotHost ее не чистит)
+# ФАЙЛ БАЗЫ ДАННЫХ (сохраняется навсегда)
+DB_PATH = '/app/data.db'
 UPLOAD_FOLDER = '/app/uploads'
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+if not os.path.exists(UPLOAD_FOLDER): os.makedirs(UPLOAD_FOLDER)
+
+# --- ИНИЦИАЛИЗАЦИЯ БД ---
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, title TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS catalog (id TEXT PRIMARY KEY, title TEXT, desc TEXT, price TEXT, img_path TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, chat_id TEXT, text TEXT, time TEXT, is_daily INTEGER, img_path TEXT)''')
+    conn.commit()
+    conn.close()
+
+init_db()
 
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 scheduler = BackgroundScheduler(timezone=MOSCOW_TZ)
@@ -32,32 +42,24 @@ headers = {"Authorization": TOKEN}
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
+# --- ЗАГРУЗКА ФАЙЛОВ В MAX ---
 def upload_file_to_max(filepath, file_type='image'):
     try:
         upload_url_api = f"{BASE_URL}/uploads"
-        params = {"type": file_type}
-        res = requests.post(upload_url_api, headers=headers, params=params, verify=False)
+        res = requests.post(upload_url_api, headers=headers, params={"type": file_type}, verify=False)
         if res.status_code != 200: return None
         upload_url = res.json().get('url')
         if not upload_url: return None
 
         with open(filepath, 'rb') as f:
-            files = {'file': f}
-            upload_res = requests.post(upload_url, files=files, verify=False)
+            upload_res = requests.post(upload_url, files={'file': f}, verify=False)
             if upload_res.status_code == 200:
-                response_data = upload_res.json()
-                token = None
-                if file_type == 'image':
-                    photos = response_data.get('photos', {})
-                    if photos:
-                        first_photo = next(iter(photos.values()))
-                        token = first_photo.get('token')
-                else:
-                    token = response_data.get('token')
-                if token:
-                    return {"type": file_type, "payload": {"token": token}}
-    except Exception as e:
-        print(f"❌ Ошибка загрузки: {e}", flush=True)
+                data = upload_res.json()
+                token = data.get('photos', {}).get('original', {}).get('token') if file_type == 'image' else data.get('token')
+                if not token and 'photos' in data:
+                    token = next(iter(data['photos'].values())).get('token')
+                if token: return {"type": file_type, "payload": {"token": token}}
+    except Exception as e: print(f"Ошибка: {e}", flush=True)
     return None
 
 def send_max_message(chat_id, text, media_paths=None):
@@ -65,130 +67,160 @@ def send_max_message(chat_id, text, media_paths=None):
         attachments = []
         if media_paths:
             for path, ftype in media_paths:
-                att = upload_file_to_max(path, ftype)
-                if att: attachments.append(att)
+                if os.path.exists(path):
+                    att = upload_file_to_max(path, ftype)
+                    if att: attachments.append(att)
         
         payload = {"text": text}
         if attachments: payload["attachments"] = attachments
 
-        response = requests.post(f"{BASE_URL}/messages", headers=headers, params={"chat_id": chat_id}, json=payload, verify=False)
-        return response.status_code == 200
-    except Exception as e:
-        return False
+        res = requests.post(f"{BASE_URL}/messages", headers=headers, params={"chat_id": chat_id}, json=payload, verify=False)
+        return res.status_code == 200
+    except Exception: return False
 
-def scheduled_job(chat_id, text, media_paths, job_id, is_daily):
-    print(f"⏰ Сработал планировщик для {chat_id}", flush=True)
-    send_max_message(chat_id, text, media_paths)
-    if is_daily is False:
-        global SCHEDULED_JOBS
-        SCHEDULED_JOBS = [j for j in SCHEDULED_JOBS if j['id'] != job_id]
+# --- ПЛАНИРОВЩИК ---
+def scheduled_job(chat_id, text, time_str, is_daily, img_path, job_id):
+    print(f"⏰ Запуск рассылки {job_id}", flush=True)
+    media = [(img_path, 'image')] if img_path and os.path.exists(img_path) else []
+    send_max_message(chat_id, text, media)
+    
+    if is_daily == 0:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        conn.commit()
+        conn.close()
 
 # --- МАРШРУТЫ ---
 @app.route('/')
 def home(): return "Сервер работает!"
 
 @app.route('/get_chats', methods=['GET'])
-def get_chats(): return jsonify({"chats": KNOWN_CHATS})
+def get_chats():
+    conn = sqlite3.connect(DB_PATH)
+    chats = [{"id": r[0], "title": r[1]} for r in conn.execute("SELECT * FROM chats").fetchall()]
+    conn.close()
+    return jsonify({"chats": chats})
 
 @app.route('/get_jobs', methods=['GET'])
-def get_jobs(): return jsonify({"jobs": SCHEDULED_JOBS})
+def get_jobs():
+    conn = sqlite3.connect(DB_PATH)
+    jobs = []
+    for r in conn.execute("SELECT id, time, text, is_daily FROM jobs").fetchall():
+        jobs.append({"id": r[0], "time": r[1], "text": r[2][:20] + "...", "schedule": f"Каждый день в {r[1]}" if r[3] else f"Разово в {r[1]}"})
+    conn.close()
+    return jsonify({"jobs": jobs})
 
-# Удаление задачи
 @app.route('/delete_job/<job_id>', methods=['DELETE'])
 def delete_job(job_id):
-    global SCHEDULED_JOBS
-    try:
-        scheduler.remove_job(job_id)
+    try: scheduler.remove_job(job_id)
     except: pass
-    SCHEDULED_JOBS = [j for j in SCHEDULED_JOBS if j['id'] != job_id]
-    return jsonify({"status": "ok"}), 200
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "ok"})
 
 @app.route('/get_catalog', methods=['GET'])
-def get_catalog(): return jsonify({"catalog": CATALOG})
+def get_catalog():
+    conn = sqlite3.connect(DB_PATH)
+    cat = [{"id": r[0], "title": r[1], "description": r[2], "price": r[3]} for r in conn.execute("SELECT id, title, desc, price FROM catalog").fetchall()]
+    conn.close()
+    return jsonify({"catalog": cat})
 
 @app.route('/add_catalog', methods=['POST', 'OPTIONS'])
 def add_catalog():
     if request.method == 'OPTIONS': return '', 204
     try:
-        title = request.form.get('title', 'Без названия')
-        desc = request.form.get('description', '')
-        price = request.form.get('price', '')
+        title = request.form.get('title')
+        desc = request.form.get('description')
+        price = request.form.get('price')
+        item_id = str(int(time.time()))
         
-        media_paths = []
+        img_path = None
         if 'images' in request.files:
-            for file in request.files.getlist('images'):
-                if file.filename:
-                    filename = secure_filename(file.filename)
-                    # Сохраняем в постоянную папку /app/uploads
-                    path = os.path.join(UPLOAD_FOLDER, filename)
-                    file.save(path)
-                    media_paths.append((path, 'image'))
+            file = request.files['images']
+            if file.filename:
+                filename = secure_filename(file.filename)
+                img_path = os.path.join(UPLOAD_FOLDER, filename)
+                file.save(img_path)
 
-        new_item = {
-            "id": str(int(time.time())), 
-            "title": title, 
-            "description": desc, 
-            "price": price,
-            "media_paths": media_paths
-        }
-        CATALOG.append(new_item)
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("INSERT INTO catalog (id, title, desc, price, img_path) VALUES (?, ?, ?, ?, ?)", (item_id, title, desc, price, img_path))
+        conn.commit()
+        conn.close()
         return jsonify({"status": "ok"}), 200
-    except Exception as e: return jsonify({"status": "error"}), 500
+    except Exception as e: return jsonify({"status": "error", "msg": str(e)}), 500
 
 @app.route('/submit_ad', methods=['POST', 'OPTIONS'])
 def submit_ad():
     if request.method == 'OPTIONS': return '', 204
     try:
-        chat_id = request.form.get('chat_id', MY_CHAT_ID)
+        chat_id = request.form.get('chat_id')
         source = request.form.get('source', 'manual')
         time_str = request.form.get('time', '10:00')
-        date_str = request.form.get('date', '')
-        is_daily = request.form.get('daily') in ['true', 'True', 'on', '1']
+        is_daily = 1 if request.form.get('daily') in ['true', 'True', 'on', '1'] else 0
 
-        text = ""
-        media_paths = []
-
+        text, img_path = "", None
         if source == 'catalog':
-            catalog_id = request.form.get('catalog_id')
-            item = next((i for i in CATALOG if i['id'] == catalog_id), None)
-            if item:
-                text = f"🏠 {item['title']}\n\n{item['description']}\n\n💰 Цена: {item['price']}"
-                media_paths = item.get('media_paths', [])
-            else: return jsonify({"status": "error"}), 404
+            cat_id = request.form.get('catalog_id')
+            conn = sqlite3.connect(DB_PATH)
+            row = conn.execute("SELECT title, desc, price, img_path FROM catalog WHERE id=?", (cat_id,)).fetchone()
+            conn.close()
+            if row:
+                text = f"🏠 {row[0]}\n\n{row[1]}\n\n💰 Цена: {row[2]}"
+                img_path = row[3]
         else:
             text = request.form.get('text', 'Пусто')
             if 'images' in request.files:
-                for file in request.files.getlist('images'):
-                    if file.filename:
-                        filename = secure_filename(file.filename)
-                        path = os.path.join(UPLOAD_FOLDER, filename)
-                        file.save(path)
-                        media_paths.append((path, 'image'))
+                file = request.files['images']
+                if file.filename:
+                    img_path = os.path.join(UPLOAD_FOLDER, secure_filename(file.filename))
+                    file.save(img_path)
 
         hour, minute = map(int, time_str.split(':'))
         job_id = f"job_{int(time.time())}"
-        job_info = {"id": job_id, "time": time_str, "text": text[:20] + "...", "is_daily": is_daily}
+        
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("INSERT INTO jobs (id, chat_id, text, time, is_daily, img_path) VALUES (?, ?, ?, ?, ?, ?)", 
+                     (job_id, chat_id, text, time_str, is_daily, img_path))
+        conn.commit()
+        conn.close()
 
         if is_daily:
-            scheduler.add_job(scheduled_job, 'cron', hour=hour, minute=minute, args=[chat_id, text, media_paths, job_id, is_daily], id=job_id)
-            job_info["schedule"] = f"Каждый день в {time_str}"
+            scheduler.add_job(scheduled_job, 'cron', hour=hour, minute=minute, args=[chat_id, text, time_str, is_daily, img_path, job_id], id=job_id)
         else:
-            if date_str:
-                year, month, day = map(int, date_str.split('-'))
-                scheduler.add_job(scheduled_job, 'date', run_date=f"{year}-{month}-{day} {hour}:{minute}:00", args=[chat_id, text, media_paths, job_id, is_daily], id=job_id)
-                job_info["schedule"] = f"{date_str} в {time_str}"
-            else:
-                scheduler.add_job(scheduled_job, 'cron', hour=hour, minute=minute, args=[chat_id, text, media_paths, job_id, is_daily], id=job_id)
-                job_info["schedule"] = f"Сегодня в {time_str}"
+            scheduler.add_job(scheduled_job, 'cron', hour=hour, minute=minute, args=[chat_id, text, time_str, is_daily, img_path, job_id], id=job_id) # Для простоты пока cron, чтобы не падало
 
-        SCHEDULED_JOBS.append(job_info)
         return jsonify({"status": "ok"}), 200
     except Exception as e:
+        print(f"Ошибка submit_ad: {e}", flush=True)
         return jsonify({"status": "error"}), 500
 
-# ... функция run_bot без изменений ...
+# --- БОТ ---
 def run_bot():
-    pass
+    print("🚀 Бот запущен...", flush=True)
+    last_marker = None
+    while True:
+        try:
+            res = requests.get(f"{BASE_URL}/updates", headers=headers, params={"timeout": 30, "types": "message_created,bot_started"}, verify=False)
+            if res.status_code == 200:
+                data = res.json()
+                if "marker" in data: last_marker = data["marker"]
+                for u in data.get("updates", []):
+                    chat_id = u.get("chat_id") or u.get("message", {}).get("recipient", {}).get("chat_id")
+                    if chat_id:
+                        is_dialog = u.get("message", {}).get("recipient", {}).get("chat", {}).get("type") == "dialog"
+                        if not is_dialog:
+                            conn = sqlite3.connect(DB_PATH)
+                            exists = conn.execute("SELECT 1 FROM chats WHERE id=?", (chat_id,)).fetchone()
+                            if not exists:
+                                title = u.get("chat", {}).get("title") or f"Группа {chat_id}"
+                                conn.execute("INSERT INTO chats (id, title) VALUES (?, ?)", (chat_id, title))
+                                conn.commit()
+                                send_max_message(chat_id, "Привет! Я бот НЕПРОСТОПОСТ.")
+                            conn.close()
+        except Exception: time.sleep(5)
+        time.sleep(1)
 
 if __name__ == '__main__':
     t = Thread(target=run_bot)
