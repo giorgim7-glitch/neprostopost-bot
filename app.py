@@ -5,6 +5,8 @@ import urllib3
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from threading import Thread
+from apscheduler.schedulers.background import BackgroundScheduler
+from werkzeug.utils import secure_filename
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -13,55 +15,123 @@ TOKEN = "f9LHodD0cOLMdTsqq6Aayvaoutp2PBcYlCKXPS7dEg83rYK5B88u3b-KlPiCuCsRPUmJ3Vl
 BASE_URL = "https://platform-api2.max.ru"
 MY_CHAT_ID = 505757849 
 
-# База данных чатов в памяти
+# Список чатов (в оперативной памяти)
 KNOWN_CHATS = []
+# Планировщик задач
+scheduler = BackgroundScheduler()
+scheduler.start()
 
-headers = {"Authorization": TOKEN, "Content-Type": "application/json"}
+# Заголовки для работы с API MAX
+headers = {"Authorization": TOKEN}
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# --- 1. ОТПРАВКА В MAX ---
-def send_max_message(chat_id, text):
+# --- 1. ФУНКЦИЯ ЗАГРУЗКИ ФАЙЛА В MAX ---
+def upload_file_to_max(filepath, file_type='image'):
     try:
-        response = requests.post(f"{BASE_URL}/messages", headers=headers, params={"chat_id": chat_id}, json={"text": text}, verify=False)
+        upload_url = f"{BASE_URL}/uploads"
+        with open(filepath, 'rb') as f:
+            files = {'file': f}
+            res = requests.post(upload_url, headers=headers, files=files, verify=False)
+            if res.status_code == 200:
+                data = res.json()
+                # Возвращаем правильный формат вложения
+                return {"type": file_type, "payload": {"token": data.get('token')}}
+            else:
+                print(f"Ошибка загрузки файла: {res.text}", flush=True)
+    except Exception as e:
+        print(f"Исключение при загрузке файла: {e}", flush=True)
+    return None
+
+# --- 2. ОТПРАВКА СООБЩЕНИЯ (ТЕКСТ + МЕДИА) ---
+def send_max_message(chat_id, text, media_paths=None):
+    try:
+        attachments = []
+        if media_paths:
+            for path, ftype in media_paths:
+                att = upload_file_to_max(path, ftype)
+                if att:
+                    attachments.append(att)
+        
+        payload = {"text": text}
+        if attachments:
+            payload["attachments"] = attachments
+
+        response = requests.post(f"{BASE_URL}/messages", headers=headers, params={"chat_id": chat_id}, json=payload, verify=False)
         print(f"-> Отправлено в MAX (чат {chat_id}). Статус: {response.status_code}", flush=True)
         return response.status_code == 200
     except Exception as e:
-        print("-> Ошибка MAX:", e, flush=True)
+        print("-> Ошибка отправки в MAX:", e, flush=True)
         return False
 
-# --- 2. МАРШРУТЫ ДЛЯ САЙТА (LAYERO) ---
+# --- 3. ЗАДАЧА ДЛЯ ПЛАНИРОВЩИКА ---
+def scheduled_job(chat_id, text, media_paths):
+    print(f"⏰ Сработал планировщик для чата {chat_id}", flush=True)
+    send_max_message(chat_id, text, media_paths)
 
+# --- 4. ВЕБ-СЕРВЕР И МАРШРУТЫ ---
 @app.route('/')
 def home():
     return "Сервер НЕПРОСТОПОСТ работает!"
 
-# Возвращаем список сохраненных чатов
 @app.route('/get_chats', methods=['GET'])
 def get_chats():
-    print(f"Запрос чатов. Текущий список: {KNOWN_CHATS}", flush=True)
     return jsonify({"chats": KNOWN_CHATS})
 
-# Принимаем данные для рассылки
 @app.route('/submit_ad', methods=['POST', 'OPTIONS'])
 def submit_ad():
     if request.method == 'OPTIONS': return '', 204
     try:
-        data = request.get_json(silent=True)
-        print(f"\n[ДАННЫЕ ОТ САЙТА]: {data}", flush=True)
+        # Получаем текстовые данные из формы
+        chat_id = request.form.get('chat_id', MY_CHAT_ID)
+        text = request.form.get('text', 'Пусто')
+        time_str = request.form.get('time', '10:00')
         
-        chat_id = data.get('chat_id', MY_CHAT_ID) 
-        text = data.get('text', 'Пусто')
+        media_paths = []
         
-        success = send_max_message(chat_id, f"✅ Рассылка запущена:\n\n{text}")
-        return jsonify({"status": "ok" if success else "error"}), (200 if success else 500)
+        # Обработка загруженных фото
+        if 'images' in request.files:
+            for file in request.files.getlist('images'):
+                if file.filename:
+                    filename = secure_filename(file.filename)
+                    path = os.path.join('/tmp', filename)
+                    file.save(path)
+                    media_paths.append((path, 'image'))
+                    
+        # Обработка загруженного видео
+        if 'video' in request.files:
+            file = request.files['video']
+            if file.filename:
+                filename = secure_filename(file.filename)
+                path = os.path.join('/tmp', filename)
+                file.save(path)
+                media_paths.append((path, 'video'))
+
+        print(f"\n[НОВАЯ ЗАЯВКА]: Чат {chat_id}, Время {time_str}, Медиа: {len(media_paths)} шт.", flush=True)
+        
+        # Парсим время (например, "10:00" -> 10 и 0)
+        hour, minute = map(int, time_str.split(':'))
+        
+        # Добавляем задачу в планировщик (каждый день в это время)
+        scheduler.add_job(
+            scheduled_job, 
+            'cron', 
+            hour=hour, 
+            minute=minute, 
+            args=[chat_id, text, media_paths],
+            id=f"job_{chat_id}_{time_str}",
+            replace_existing=True
+        )
+        print(f"✅ Задача запланирована на {time_str} каждый день.", flush=True)
+
+        return jsonify({"status": "ok"}), 200
     except Exception as e:
-        print("Ошибка в submit_ad:", e, flush=True)
+        print(f"!! КРИТИЧЕСКАЯ ОШИБКА: {e}", flush=True)
         return jsonify({"status": "error"}), 500
 
-# --- 3. ЛОГИКА БОТА ---
+# --- 5. ЦИКЛ БОТА (СЛУШАЕТ MAX) ---
 def run_bot():
-    print("🚀 Бот запущен и слушает MAX...", flush=True)
+    print("🚀 Бот НЕПРОСТОПОСТ запущен...", flush=True)
     last_marker = None
     while True:
         try:
@@ -78,7 +148,7 @@ def run_bot():
                     for update in data["updates"]:
                         update_type = update.get("update_type")
                         
-                        # Пытаемся достать chat_id из любого события
+                        # Ищем chat_id в любом событии
                         chat_id = update.get("chat_id")
                         if not chat_id and update.get("message"):
                             chat_id = update["message"].get("recipient", {}).get("chat_id")
@@ -102,7 +172,7 @@ def run_bot():
                                     
                                     KNOWN_CHATS.append({"id": chat_id, "title": title})
                                     print(f"✅ НОВЫЙ ЧАТ ДОБАВЛЕН: {title} ({chat_id})", flush=True)
-                                    send_max_message(chat_id, "Привет! Я бот НЕПРОСТОПОСТ. Теперь я буду публиковать здесь ваши объявления.")
+                                    send_max_message(chat_id, "Привет! Я бот НЕПРОСТОПОСТ. Теперь я буду публиковать здесь ваши объявления по расписанию.")
                                     
                         if update_type == "bot_started":
                             send_max_message(update.get("chat_id"), "Привет! Добавь меня в группу и сделай админом, чтобы я мог рассылать объявления.")
