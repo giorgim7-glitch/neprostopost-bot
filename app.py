@@ -19,7 +19,7 @@ MY_CHAT_ID = 505757849
 KNOWN_CHATS = []
 SCHEDULED_JOBS = []
 
-# Указываем часовой пояс (Москва)
+# Часовой пояс (Москва)
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 scheduler = BackgroundScheduler(timezone=MOSCOW_TZ)
 scheduler.start()
@@ -28,23 +28,56 @@ headers = {"Authorization": TOKEN}
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# --- 1. ФУНКЦИЯ ЗАГРУЗКИ ФАЙЛА В MAX (ИСПРАВЛЕНА) ---
+# --- 1. ФУНКЦИЯ ЗАГРУЗКИ ФАЙЛА В MAX (ИСПРАВЛЕНА ПО ДОКУМЕНТАЦИИ) ---
 def upload_file_to_max(filepath, file_type='image'):
     try:
-        upload_url = f"{BASE_URL}/uploads"
-        # MAX требует передавать тип файла в параметрах запроса
-        params = {"type": file_type} 
+        # Шаг 1: Получаем URL для загрузки
+        upload_url_api = f"{BASE_URL}/uploads"
+        params = {"type": file_type}
+        res = requests.post(upload_url_api, headers=headers, params=params, verify=False)
         
-        with open(filepath, 'rb') as f:
-            files = {'file': f}
-            res = requests.post(upload_url, headers=headers, params=params, files=files, verify=False)
+        if res.status_code != 200:
+            print(f"❌ Ошибка получения URL: {res.status_code} - {res.text}", flush=True)
+            return None
             
-            if res.status_code == 200:
-                return {"type": file_type, "payload": {"token": res.json().get('token')}}
+        upload_data = res.json()
+        upload_url = upload_data.get('url')
+        
+        if not upload_url:
+            print(f"❌ Нет URL в ответе: {upload_data}", flush=True)
+            return None
+
+        # Шаг 2: Загружаем файл по полученному URL (поле должно называться 'data')
+        with open(filepath, 'rb') as f:
+            files = {'data': f}
+            upload_res = requests.post(upload_url, files=files, verify=False)
+            
+            if upload_res.status_code == 200:
+                response_data = upload_res.json()
+                
+                # MAX возвращает токен по-разному для разных типов
+                token = None
+                if file_type == 'image':
+                    # Для картинок токен лежит внутри объекта 'photos'
+                    photos = response_data.get('photos', {})
+                    if photos:
+                        # Берем первый попавшийся токен (обычно это оригинал)
+                        first_photo = next(iter(photos.values()))
+                        token = first_photo.get('token')
+                else:
+                    # Для видео и файлов токен обычно в корне
+                    token = response_data.get('token')
+                
+                if token:
+                    print(f"✅ Файл загружен. Токен: {token[:20]}...", flush=True)
+                    return {"type": file_type, "payload": {"token": token}}
+                else:
+                    print(f"❌ Токен не найден в ответе: {response_data}", flush=True)
             else:
-                print(f"Ошибка загрузки файла: {res.text}", flush=True)
+                print(f"❌ Ошибка загрузки файла: {upload_res.status_code} - {upload_res.text}", flush=True)
+                
     except Exception as e:
-        print(f"Исключение при загрузке: {e}", flush=True)
+        print(f"❌ Исключение при загрузке: {e}", flush=True)
     return None
 
 # --- 2. ОТПРАВКА СООБЩЕНИЯ ---
@@ -54,27 +87,32 @@ def send_max_message(chat_id, text, media_paths=None):
         if media_paths:
             for path, ftype in media_paths:
                 att = upload_file_to_max(path, ftype)
-                if att: attachments.append(att)
+                if att: 
+                    attachments.append(att)
         
         payload = {"text": text}
         if attachments:
             payload["attachments"] = attachments
 
         response = requests.post(f"{BASE_URL}/messages", headers=headers, params={"chat_id": chat_id}, json=payload, verify=False)
-        print(f"-> Отправлено в MAX (чат {chat_id}). Статус: {response.status_code}", flush=True)
+        print(f"-> Отправлено в MAX. Статус: {response.status_code}", flush=True)
+        if response.status_code != 200:
+            print(f"-> Ошибка MAX: {response.text}", flush=True)
         return response.status_code == 200
     except Exception as e:
         print("-> Ошибка отправки в MAX:", e, flush=True)
         return False
 
 # --- 3. ЗАДАЧА ДЛЯ ПЛАНИРОВЩИКА ---
-def scheduled_job(chat_id, text, media_paths, job_id):
+def scheduled_job(chat_id, text, media_paths, job_id, is_daily):
     print(f"⏰ СРАБОТАЛ ПЛАНИРОВЩИК для чата {chat_id} (ID: {job_id})", flush=True)
     send_max_message(chat_id, text, media_paths)
     
-    # Удаляем задачу из списка активных после отправки
-    global SCHEDULED_JOBS
-    SCHEDULED_JOBS = [j for j in SCHEDULED_JOBS if j['id'] != job_id]
+    # Удаляем разовую задачу из списка после отправки
+    if not is_daily:
+        global SCHEDULED_JOBS
+        SCHEDULED_JOBS = [j for j in SCHEDULED_JOBS if j['id'] != job_id]
+        print(f"🗑️ Разовая задача {job_id} удалена.", flush=True)
 
 # --- 4. МАРШРУТЫ ---
 @app.route('/')
@@ -110,18 +148,18 @@ def submit_ad():
 
         hour, minute = map(int, time_str.split(':'))
         job_id = f"job_{int(time.time())}"
-        job_info = {"id": job_id, "time": time_str, "text": text[:20] + "..."}
+        job_info = {"id": job_id, "time": time_str, "text": text[:20] + "...", "is_daily": is_daily}
 
         if is_daily:
-            scheduler.add_job(scheduled_job, 'cron', hour=hour, minute=minute, args=[chat_id, text, media_paths, job_id], id=job_id)
+            scheduler.add_job(scheduled_job, 'cron', hour=hour, minute=minute, args=[chat_id, text, media_paths, job_id, is_daily], id=job_id)
             job_info["schedule"] = f"Каждый день в {time_str}"
         else:
             if date_str:
                 year, month, day = map(int, date_str.split('-'))
-                scheduler.add_job(scheduled_job, 'date', run_date=f"{year}-{month}-{day} {hour}:{minute}:00", args=[chat_id, text, media_paths, job_id], id=job_id)
+                scheduler.add_job(scheduled_job, 'date', run_date=f"{year}-{month}-{day} {hour}:{minute}:00", args=[chat_id, text, media_paths, job_id, is_daily], id=job_id)
                 job_info["schedule"] = f"{date_str} в {time_str}"
             else:
-                scheduler.add_job(scheduled_job, 'cron', hour=hour, minute=minute, args=[chat_id, text, media_paths, job_id], id=job_id)
+                scheduler.add_job(scheduled_job, 'cron', hour=hour, minute=minute, args=[chat_id, text, media_paths, job_id, is_daily], id=job_id)
                 job_info["schedule"] = f"Сегодня в {time_str}"
 
         SCHEDULED_JOBS.append(job_info)
@@ -131,7 +169,7 @@ def submit_ad():
         print(f"!! Ошибка: {e}", flush=True)
         return jsonify({"status": "error"}), 500
 
-# --- 5. ЦИКЛ БОТА (СЛУШАЕТ MAX) ---
+# --- 5. ЦИКЛ БОТА ---
 def run_bot():
     print("🚀 Бот НЕПРОСТОПОСТ запущен...", flush=True)
     last_marker = None
@@ -149,7 +187,6 @@ def run_bot():
                 if "updates" in data:
                     for update in data["updates"]:
                         update_type = update.get("update_type")
-                        
                         chat_id = update.get("chat_id")
                         if not chat_id and update.get("message"):
                             chat_id = update["message"].get("recipient", {}).get("chat_id")
