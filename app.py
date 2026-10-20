@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# --- НАСТРОЙКИ ---
 TOKEN = "f9LHodD0cOLMdTsqq6Aayvaoutp2PBcYlCKXPS7dEg83rYK5B88u3b-KlPiCuCsRPUmJ3Vl6ruCUgOSCqFig"
 BASE_URL = "https://platform-api2.max.ru"
 MY_CHAT_ID = 505757849 
@@ -21,6 +22,7 @@ DB_PATH = '/app/data.db'
 UPLOAD_FOLDER = '/app/uploads'
 if not os.path.exists(UPLOAD_FOLDER): os.makedirs(UPLOAD_FOLDER)
 
+# --- БАЗА ДАННЫХ ---
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -42,7 +44,7 @@ headers = {"Authorization": TOKEN}
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# --- 1. ФАЙЛЫ И СООБЩЕНИЯ ---
+# --- ФУНКЦИИ ---
 def upload_file_to_max(filepath, file_type='image'):
     try:
         upload_url_api = f"{BASE_URL}/uploads"
@@ -58,7 +60,8 @@ def upload_file_to_max(filepath, file_type='image'):
                 if not token and 'photos' in data:
                     token = next(iter(data['photos'].values())).get('token')
                 if token: return {"type": file_type, "payload": {"token": token}}
-    except Exception: return None
+    except Exception as e: print(f"Ошибка загрузки: {e}", flush=True)
+    return None
 
 def send_max_message(chat_id, text, media_paths=None):
     try:
@@ -74,7 +77,7 @@ def send_max_message(chat_id, text, media_paths=None):
         return res.status_code == 200
     except Exception: return False
 
-# --- 2. ПЛАНИРОВЩИК ---
+# --- ПЛАНИРОВЩИК ---
 def scheduled_job(chat_id, text, time_str, is_daily, img_paths, job_id):
     time.sleep(1)
     media = [p.strip() for p in img_paths.split(',')] if img_paths else []
@@ -88,13 +91,43 @@ def scheduled_job(chat_id, text, time_str, is_daily, img_paths, job_id):
 def send_client_reminder(admin_chat_id, client_name, text, client_id):
     time.sleep(3)
     reminder_text = f"🔔 Напоминание по клиенту:\n\n👤 {client_name}\n\n📝 {text}\n\nПора написать!"
-    send_max_message(admin_chat_id, reminder_text)
+    success = send_max_message(admin_chat_id, reminder_text)
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("UPDATE clients SET status='Отправлено' WHERE id=?", (client_id,))
+    status = 'Отправлено' if success else 'Ошибка'
+    conn.execute("UPDATE clients SET status=? WHERE id=?", (status, client_id))
     conn.commit()
     conn.close()
 
-# --- 3. МАРШРУТЫ ---
+# --- ПРОВЕРКА ЛИМИТОВ (ПЛАТНЫЙ ФУНКЦИОНАЛ) ---
+def check_limits(chat_id, item_type):
+    conn = sqlite3.connect(DB_PATH)
+    user = conn.execute("SELECT is_paid FROM users WHERE chat_id=?", (chat_id,)).fetchone()
+    is_paid = user[0] if user else 0
+    
+    if is_paid == 1:
+        conn.close()
+        return True, "Оплачено"
+
+    if item_type == 'chat':
+        count = conn.execute("SELECT COUNT(*) FROM chats").fetchone()[0]
+        if count >= 1:
+            conn.close()
+            return False, "На бесплатном тарифе можно добавить только 1 группу. Оплатите подписку."
+    elif item_type == 'job':
+        count = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+        if count >= 3:
+            conn.close()
+            return False, "Лимит бесплатных рассылок (3 шт). Оплатите подписку."
+    elif item_type == 'client':
+        count = conn.execute("SELECT COUNT(*) FROM clients").fetchone()[0]
+        if count >= 3:
+            conn.close()
+            return False, "Лимит планера (3 клиента). Оплатите подписку."
+
+    conn.close()
+    return True, "OK"
+
+# --- МАРШРУТЫ ---
 @app.route('/')
 def home(): return "Сервер работает!"
 
@@ -164,6 +197,9 @@ def get_catalog():
 def add_catalog():
     if request.method == 'OPTIONS': return '', 204
     try:
+        allowed, msg = check_limits(MY_CHAT_ID, 'catalog')
+        if not allowed: return jsonify({"status": "error", "message": msg}), 403
+
         title, desc, price = request.form.get('title'), request.form.get('description'), request.form.get('price')
         tag, address = request.form.get('tag', 'Новостройка'), request.form.get('address', 'Краснодар')
         item_id = str(int(time.time()))
@@ -179,13 +215,17 @@ def add_catalog():
         conn.commit()
         conn.close()
         return jsonify({"status": "ok"}), 200
-    except Exception as e: return jsonify({"status": "error"}), 500
+    except Exception as e: return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/submit_ad', methods=['POST', 'OPTIONS'])
 def submit_ad():
     if request.method == 'OPTIONS': return '', 204
     try:
         chat_id = request.form.get('chat_id')
+        
+        allowed, msg = check_limits(MY_CHAT_ID, 'job')
+        if not allowed: return jsonify({"status": "error", "message": msg}), 403
+
         time_str = request.form.get('time', '10:00')
         text = request.form.get('text', 'Пусто')
         job_id = f"job_{int(time.time())}"
@@ -198,7 +238,7 @@ def submit_ad():
 
         scheduler.add_job(scheduled_job, 'cron', hour=hour, minute=minute, args=[chat_id, text, time_str, 1, "", job_id], id=job_id)
         return jsonify({"status": "ok"}), 200
-    except Exception as e: return jsonify({"status": "error"}), 500
+    except Exception as e: return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/get_clients', methods=['GET'])
 def get_clients():
@@ -211,6 +251,9 @@ def get_clients():
 def add_client():
     if request.method == 'OPTIONS': return '', 204
     try:
+        allowed, msg = check_limits(MY_CHAT_ID, 'client')
+        if not allowed: return jsonify({"status": "error", "message": msg}), 403
+
         name, phone = request.form.get('name'), request.form.get('phone', '')
         text, time_str, date_str = request.form.get('text'), request.form.get('time'), request.form.get('date')
         admin_chat_id = request.form.get('admin_chat_id')
@@ -227,9 +270,9 @@ def add_client():
         
         scheduler.add_job(send_client_reminder, 'date', run_date=run_date, args=[admin_chat_id, name, text, client_id], id=f"client_{client_id}")
         return jsonify({"status": "ok"}), 200
-    except Exception as e: return jsonify({"status": "error"}), 500
+    except Exception as e: return jsonify({"status": "error", "message": str(e)}), 500
 
-# --- 4. БОТ ---
+# --- БОТ ---
 def run_bot():
     print("🚀 Бот запущен...", flush=True)
     last_marker = None
