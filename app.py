@@ -24,9 +24,18 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, title TEXT)''')
-    # В таблице каталога теперь храним пути ко всем фото через запятую (img_paths)
     c.execute('''CREATE TABLE IF NOT EXISTS catalog (id TEXT PRIMARY KEY, title TEXT, desc TEXT, price TEXT, img_paths TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, chat_id TEXT, text TEXT, time TEXT, is_daily INTEGER, img_paths TEXT)''')
+    
+    # НОВАЯ ТАБЛИЦА ДЛЯ ПЛАНЕРА КАСАНИЙ
+    c.execute('''CREATE TABLE IF NOT EXISTS clients (
+        id TEXT PRIMARY KEY, 
+        name TEXT, 
+        client_chat_id TEXT, 
+        text TEXT, 
+        schedule_time TEXT, 
+        status TEXT
+    )''')
     conn.commit()
     conn.close()
 
@@ -40,57 +49,35 @@ headers = {"Authorization": TOKEN}
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
+# ... (функции upload_file_to_max и send_max_message оставляем без изменений) ...
 def upload_file_to_max(filepath, file_type='image'):
-    try:
-        upload_url_api = f"{BASE_URL}/uploads"
-        res = requests.post(upload_url_api, headers=headers, params={"type": file_type}, verify=False)
-        if res.status_code != 200: return None
-        upload_url = res.json().get('url')
-        if not upload_url: return None
-
-        with open(filepath, 'rb') as f:
-            upload_res = requests.post(upload_url, files={'file': f}, verify=False)
-            if upload_res.status_code == 200:
-                data = upload_res.json()
-                token = data.get('photos', {}).get('original', {}).get('token') if file_type == 'image' else data.get('token')
-                if not token and 'photos' in data:
-                    token = next(iter(data['photos'].values())).get('token')
-                if token: return {"type": file_type, "payload": {"token": token}}
-    except Exception as e: print(f"Ошибка: {e}", flush=True)
-    return None
+    # ... код ...
+    pass # (вставь код из предыдущего сообщения)
 
 def send_max_message(chat_id, text, media_paths=None):
-    try:
-        attachments = []
-        if media_paths:
-            for path in media_paths:
-                if os.path.exists(path):
-                    att = upload_file_to_max(path, 'image')
-                    if att: attachments.append(att)
-        
-        payload = {"text": text}
-        if attachments: payload["attachments"] = attachments
+    # ... код ...
+    pass # (вставь код из предыдущего сообщения)
 
-        res = requests.post(f"{BASE_URL}/messages", headers=headers, params={"chat_id": chat_id}, json=payload, verify=False)
-        return res.status_code == 200
-    except Exception: return False
-
+# ... (scheduled_job оставляем без изменений) ...
 def scheduled_job(chat_id, text, time_str, is_daily, img_paths, job_id):
-    print(f"⏰ Запуск рассылки {job_id}", flush=True)
-    media = []
-    if img_paths:
-        # Разбиваем строку с путями обратно в список
-        for path in img_paths.split(','):
-            if path.strip(): media.append(path.strip())
-            
-    send_max_message(chat_id, text, media)
-    
-    if is_daily == 0:
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
-        conn.commit()
-        conn.close()
+    # ... код ...
+    pass
 
+# --- ПЛАНИРОВЩИК ДЛЯ КЛИЕНТОВ (ПЛАНЕР) ---
+def send_client_message(client_chat_id, text, client_id):
+    print(f"⏰ Отправка напоминания клиенту {client_id}", flush=True)
+    success = send_max_message(client_chat_id, text)
+    
+    # После отправки обновляем статус в базе
+    conn = sqlite3.connect(DB_PATH)
+    if success:
+        conn.execute("UPDATE clients SET status='Отправлено' WHERE id=?", (client_id,))
+    else:
+        conn.execute("UPDATE clients SET status='Ошибка' WHERE id=?", (client_id,))
+    conn.commit()
+    conn.close()
+
+# --- МАРШРУТЫ ---
 @app.route('/')
 def home(): return "Сервер работает!"
 
@@ -120,91 +107,55 @@ def delete_job(job_id):
     conn.close()
     return jsonify({"status": "ok"})
 
+# ... (маршруты get_catalog, add_catalog, submit_ad оставляем без изменений) ...
 @app.route('/get_catalog', methods=['GET'])
 def get_catalog():
-    conn = sqlite3.connect(DB_PATH)
-    cat = [{"id": r[0], "title": r[1], "description": r[2], "price": r[3]} for r in conn.execute("SELECT id, title, desc, price FROM catalog").fetchall()]
-    conn.close()
-    return jsonify({"catalog": cat})
+    # ... код ...
+    pass
 
 @app.route('/add_catalog', methods=['POST', 'OPTIONS'])
 def add_catalog():
-    if request.method == 'OPTIONS': return '', 204
-    try:
-        title = request.form.get('title')
-        desc = request.form.get('description')
-        price = request.form.get('price')
-        item_id = str(int(time.time()))
-        
-        saved_paths = []
-        if 'images' in request.files:
-            # Берем ВСЕ файлы
-            for file in request.files.getlist('images'):
-                if file.filename:
-                    filename = secure_filename(file.filename)
-                    path = os.path.join(UPLOAD_FOLDER, filename)
-                    file.save(path)
-                    saved_paths.append(path)
-
-        # Сохраняем все пути через запятую
-        img_paths_str = ",".join(saved_paths)
-
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute("INSERT INTO catalog (id, title, desc, price, img_paths) VALUES (?, ?, ?, ?, ?)", (item_id, title, desc, price, img_paths_str))
-        conn.commit()
-        conn.close()
-        return jsonify({"status": "ok"}), 200
-    except Exception as e: return jsonify({"status": "error", "msg": str(e)}), 500
+    # ... код ...
+    pass
 
 @app.route('/submit_ad', methods=['POST', 'OPTIONS'])
 def submit_ad():
+    # ... код ...
+    pass
+
+# --- НОВЫЕ МАРШРУТЫ ДЛЯ ПЛАНЕРА КАСАНИЙ ---
+@app.route('/get_clients', methods=['GET'])
+def get_clients():
+    conn = sqlite3.connect(DB_PATH)
+    clients = []
+    for r in conn.execute("SELECT id, name, client_chat_id, text, schedule_time, status FROM clients").fetchall():
+        clients.append({"id": r[0], "name": r[1], "client_chat_id": r[2], "text": r[3], "schedule_time": r[4], "status": r[5]})
+    conn.close()
+    return jsonify({"clients": clients})
+
+@app.route('/add_client', methods=['POST', 'OPTIONS'])
+def add_client():
     if request.method == 'OPTIONS': return '', 204
     try:
-        chat_id = request.form.get('chat_id')
-        source = request.form.get('source', 'manual')
-        time_str = request.form.get('time', '10:00')
-        is_daily = 1 if request.form.get('daily') in ['true', 'True', 'on', '1'] else 0
+        name = request.form.get('name')
+        text = request.form.get('text')
+        time_str = request.form.get('time') # Формат HH:MM
+        date_str = request.form.get('date') # Формат YYYY-MM-DD
 
-        text, img_paths_str = "", ""
-        if source == 'catalog':
-            cat_id = request.form.get('catalog_id')
-            conn = sqlite3.connect(DB_PATH)
-            row = conn.execute("SELECT title, desc, price, img_paths FROM catalog WHERE id=?", (cat_id,)).fetchone()
-            conn.close()
-            if row:
-                text = f"🏠 {row[0]}\n\n{row[1]}\n\n💰 Цена: {row[2]}"
-                img_paths_str = row[3] or ""
-        else:
-            text = request.form.get('text', 'Пусто')
-            saved_paths = []
-            if 'images' in request.files:
-                for file in request.files.getlist('images'):
-                    if file.filename:
-                        filename = secure_filename(file.filename)
-                        path = os.path.join(UPLOAD_FOLDER, filename)
-                        file.save(path)
-                        saved_paths.append(path)
-            img_paths_str = ",".join(saved_paths)
-
-        hour, minute = map(int, time_str.split(':'))
-        job_id = f"job_{int(time.time())}"
+        client_id = str(int(time.time()))
         
+        # Сохраняем в базу (пока без chat_id клиента, его мы получим, когда он нажмет Start)
         conn = sqlite3.connect(DB_PATH)
-        conn.execute("INSERT INTO jobs (id, chat_id, text, time, is_daily, img_paths) VALUES (?, ?, ?, ?, ?, ?)", 
-                     (job_id, chat_id, text, time_str, is_daily, img_paths_str))
+        conn.execute("INSERT INTO clients (id, name, client_chat_id, text, schedule_time, status) VALUES (?, ?, ?, ?, ?, ?)", 
+                     (client_id, name, '', text, f"{date_str} {time_str}", "Ожидает привязки"))
         conn.commit()
         conn.close()
 
-        if is_daily:
-            scheduler.add_job(scheduled_job, 'cron', hour=hour, minute=minute, args=[chat_id, text, time_str, is_daily, img_paths_str, job_id], id=job_id)
-        else:
-            scheduler.add_job(scheduled_job, 'cron', hour=hour, minute=minute, args=[chat_id, text, time_str, is_daily, img_paths_str, job_id], id=job_id)
-
-        return jsonify({"status": "ok"}), 200
+        return jsonify({"status": "ok", "client_id": client_id}), 200
     except Exception as e:
-        print(f"Ошибка submit_ad: {e}", flush=True)
-        return jsonify({"status": "error"}), 500
+        return jsonify({"status": "error", "msg": str(e)}), 500
 
+# --- ЦИКЛ БОТА ---
 def run_bot():
     print("🚀 Бот запущен...", flush=True)
     last_marker = None
@@ -214,8 +165,12 @@ def run_bot():
             if res.status_code == 200:
                 data = res.json()
                 if "marker" in data: last_marker = data["marker"]
+                
                 for u in data.get("updates", []):
+                    update_type = u.get("update_type")
                     chat_id = u.get("chat_id") or u.get("message", {}).get("recipient", {}).get("chat_id")
+                    
+                    # 1. Ловим группы
                     if chat_id:
                         is_dialog = u.get("message", {}).get("recipient", {}).get("chat", {}).get("type") == "dialog"
                         if not is_dialog:
@@ -227,7 +182,41 @@ def run_bot():
                                 conn.commit()
                                 send_max_message(chat_id, "Привет! Я бот НЕПРОСТОПОСТ.")
                             conn.close()
-        except Exception: time.sleep(5)
+
+                    # 2. Ловим старт в личке (для планера)
+                    if update_type == "bot_started":
+                        # Получаем payload (параметр из ссылки)
+                        payload = u.get("payload") 
+                        if payload:
+                            # Пользователь перешел по ссылке с ID клиента
+                            client_id = payload
+                            conn = sqlite3.connect(DB_PATH)
+                            client = conn.execute("SELECT text, schedule_time FROM clients WHERE id=?", (client_id,)).fetchone()
+                            if client:
+                                text, schedule_time = client
+                                # Привязываем chat_id клиента
+                                conn.execute("UPDATE clients SET client_chat_id=?, status='Запланировано' WHERE id=?", (chat_id, client_id))
+                                conn.commit()
+                                
+                                # Ставим задачу в планировщик
+                                date_part, time_part = schedule_time.split(' ')
+                                hour, minute = map(int, time_part.split(':'))
+                                year, month, day = map(int, date_part.split('-'))
+                                
+                                scheduler.add_job(
+                                    send_client_message, 
+                                    'date', 
+                                    run_date=f"{year}-{month}-{day} {hour}:{minute}:00", 
+                                    args=[chat_id, text, client_id], 
+                                    id=f"client_{client_id}"
+                                )
+                                send_max_message(chat_id, f"Отлично! Я напомню вам о встрече {schedule_time}.")
+                            conn.close()
+                        else:
+                            send_max_message(chat_id, "Привет! Я бот-помощник НЕПРОСТОПОСТ.")
+        except Exception as e: 
+            print(f"Ошибка цикла: {e}", flush=True)
+            time.sleep(5)
         time.sleep(1)
 
 if __name__ == '__main__':
