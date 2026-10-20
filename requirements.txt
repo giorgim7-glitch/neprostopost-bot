@@ -2,3 +2,5 @@ Flask
 Flask-CORS
 requests
 gunicorn
+apscheduler
+werkzeug
