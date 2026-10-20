@@ -12,23 +12,21 @@ import sqlite3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- НАСТРОЙКИ ---
 TOKEN = "f9LHodD0cOLMdTsqq6Aayvaoutp2PBcYlCKXPS7dEg83rYK5B88u3b-KlPiCuCsRPUmJ3Vl6ruCUgOSCqFig"
 BASE_URL = "https://platform-api2.max.ru"
 MY_CHAT_ID = 505757849 
 
-# ФАЙЛ БАЗЫ ДАННЫХ (сохраняется навсегда)
 DB_PATH = '/app/data.db'
 UPLOAD_FOLDER = '/app/uploads'
 if not os.path.exists(UPLOAD_FOLDER): os.makedirs(UPLOAD_FOLDER)
 
-# --- ИНИЦИАЛИЗАЦИЯ БД ---
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, title TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS catalog (id TEXT PRIMARY KEY, title TEXT, desc TEXT, price TEXT, img_path TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, chat_id TEXT, text TEXT, time TEXT, is_daily INTEGER, img_path TEXT)''')
+    # В таблице каталога теперь храним пути ко всем фото через запятую (img_paths)
+    c.execute('''CREATE TABLE IF NOT EXISTS catalog (id TEXT PRIMARY KEY, title TEXT, desc TEXT, price TEXT, img_paths TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, chat_id TEXT, text TEXT, time TEXT, is_daily INTEGER, img_paths TEXT)''')
     conn.commit()
     conn.close()
 
@@ -42,7 +40,6 @@ headers = {"Authorization": TOKEN}
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# --- ЗАГРУЗКА ФАЙЛОВ В MAX ---
 def upload_file_to_max(filepath, file_type='image'):
     try:
         upload_url_api = f"{BASE_URL}/uploads"
@@ -66,9 +63,9 @@ def send_max_message(chat_id, text, media_paths=None):
     try:
         attachments = []
         if media_paths:
-            for path, ftype in media_paths:
+            for path in media_paths:
                 if os.path.exists(path):
-                    att = upload_file_to_max(path, ftype)
+                    att = upload_file_to_max(path, 'image')
                     if att: attachments.append(att)
         
         payload = {"text": text}
@@ -78,10 +75,14 @@ def send_max_message(chat_id, text, media_paths=None):
         return res.status_code == 200
     except Exception: return False
 
-# --- ПЛАНИРОВЩИК ---
-def scheduled_job(chat_id, text, time_str, is_daily, img_path, job_id):
+def scheduled_job(chat_id, text, time_str, is_daily, img_paths, job_id):
     print(f"⏰ Запуск рассылки {job_id}", flush=True)
-    media = [(img_path, 'image')] if img_path and os.path.exists(img_path) else []
+    media = []
+    if img_paths:
+        # Разбиваем строку с путями обратно в список
+        for path in img_paths.split(','):
+            if path.strip(): media.append(path.strip())
+            
     send_max_message(chat_id, text, media)
     
     if is_daily == 0:
@@ -90,7 +91,6 @@ def scheduled_job(chat_id, text, time_str, is_daily, img_path, job_id):
         conn.commit()
         conn.close()
 
-# --- МАРШРУТЫ ---
 @app.route('/')
 def home(): return "Сервер работает!"
 
@@ -136,16 +136,21 @@ def add_catalog():
         price = request.form.get('price')
         item_id = str(int(time.time()))
         
-        img_path = None
+        saved_paths = []
         if 'images' in request.files:
-            file = request.files['images']
-            if file.filename:
-                filename = secure_filename(file.filename)
-                img_path = os.path.join(UPLOAD_FOLDER, filename)
-                file.save(img_path)
+            # Берем ВСЕ файлы
+            for file in request.files.getlist('images'):
+                if file.filename:
+                    filename = secure_filename(file.filename)
+                    path = os.path.join(UPLOAD_FOLDER, filename)
+                    file.save(path)
+                    saved_paths.append(path)
+
+        # Сохраняем все пути через запятую
+        img_paths_str = ",".join(saved_paths)
 
         conn = sqlite3.connect(DB_PATH)
-        conn.execute("INSERT INTO catalog (id, title, desc, price, img_path) VALUES (?, ?, ?, ?, ?)", (item_id, title, desc, price, img_path))
+        conn.execute("INSERT INTO catalog (id, title, desc, price, img_paths) VALUES (?, ?, ?, ?, ?)", (item_id, title, desc, price, img_paths_str))
         conn.commit()
         conn.close()
         return jsonify({"status": "ok"}), 200
@@ -160,43 +165,46 @@ def submit_ad():
         time_str = request.form.get('time', '10:00')
         is_daily = 1 if request.form.get('daily') in ['true', 'True', 'on', '1'] else 0
 
-        text, img_path = "", None
+        text, img_paths_str = "", ""
         if source == 'catalog':
             cat_id = request.form.get('catalog_id')
             conn = sqlite3.connect(DB_PATH)
-            row = conn.execute("SELECT title, desc, price, img_path FROM catalog WHERE id=?", (cat_id,)).fetchone()
+            row = conn.execute("SELECT title, desc, price, img_paths FROM catalog WHERE id=?", (cat_id,)).fetchone()
             conn.close()
             if row:
                 text = f"🏠 {row[0]}\n\n{row[1]}\n\n💰 Цена: {row[2]}"
-                img_path = row[3]
+                img_paths_str = row[3] or ""
         else:
             text = request.form.get('text', 'Пусто')
+            saved_paths = []
             if 'images' in request.files:
-                file = request.files['images']
-                if file.filename:
-                    img_path = os.path.join(UPLOAD_FOLDER, secure_filename(file.filename))
-                    file.save(img_path)
+                for file in request.files.getlist('images'):
+                    if file.filename:
+                        filename = secure_filename(file.filename)
+                        path = os.path.join(UPLOAD_FOLDER, filename)
+                        file.save(path)
+                        saved_paths.append(path)
+            img_paths_str = ",".join(saved_paths)
 
         hour, minute = map(int, time_str.split(':'))
         job_id = f"job_{int(time.time())}"
         
         conn = sqlite3.connect(DB_PATH)
-        conn.execute("INSERT INTO jobs (id, chat_id, text, time, is_daily, img_path) VALUES (?, ?, ?, ?, ?, ?)", 
-                     (job_id, chat_id, text, time_str, is_daily, img_path))
+        conn.execute("INSERT INTO jobs (id, chat_id, text, time, is_daily, img_paths) VALUES (?, ?, ?, ?, ?, ?)", 
+                     (job_id, chat_id, text, time_str, is_daily, img_paths_str))
         conn.commit()
         conn.close()
 
         if is_daily:
-            scheduler.add_job(scheduled_job, 'cron', hour=hour, minute=minute, args=[chat_id, text, time_str, is_daily, img_path, job_id], id=job_id)
+            scheduler.add_job(scheduled_job, 'cron', hour=hour, minute=minute, args=[chat_id, text, time_str, is_daily, img_paths_str, job_id], id=job_id)
         else:
-            scheduler.add_job(scheduled_job, 'cron', hour=hour, minute=minute, args=[chat_id, text, time_str, is_daily, img_path, job_id], id=job_id) # Для простоты пока cron, чтобы не падало
+            scheduler.add_job(scheduled_job, 'cron', hour=hour, minute=minute, args=[chat_id, text, time_str, is_daily, img_paths_str, job_id], id=job_id)
 
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         print(f"Ошибка submit_ad: {e}", flush=True)
         return jsonify({"status": "error"}), 500
 
-# --- БОТ ---
 def run_bot():
     print("🚀 Бот запущен...", flush=True)
     last_marker = None
