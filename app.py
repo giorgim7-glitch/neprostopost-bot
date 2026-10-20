@@ -11,14 +11,13 @@ import pytz
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- НАСТРОЙКИ ---
 TOKEN = "f9LHodD0cOLMdTsqq6Aayvaoutp2PBcYlCKXPS7dEg83rYK5B88u3b-KlPiCuCsRPUmJ3Vl6ruCUgOSCqFig"
 BASE_URL = "https://platform-api2.max.ru"
 MY_CHAT_ID = 505757849 
 
 KNOWN_CHATS = []
 SCHEDULED_JOBS = []
-CATALOG = [] # База объектов
+CATALOG = [] 
 
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 scheduler = BackgroundScheduler(timezone=MOSCOW_TZ)
@@ -28,7 +27,6 @@ headers = {"Authorization": TOKEN}
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# --- ФУНКЦИИ ---
 def upload_file_to_max(filepath, file_type='image'):
     try:
         upload_url_api = f"{BASE_URL}/uploads"
@@ -80,7 +78,6 @@ def scheduled_job(chat_id, text, media_paths, job_id, is_daily):
         global SCHEDULED_JOBS
         SCHEDULED_JOBS = [j for j in SCHEDULED_JOBS if j['id'] != job_id]
 
-# --- МАРШРУТЫ ---
 @app.route('/')
 def home(): return "Сервер работает!"
 
@@ -93,17 +90,32 @@ def get_jobs(): return jsonify({"jobs": SCHEDULED_JOBS})
 @app.route('/get_catalog', methods=['GET'])
 def get_catalog(): return jsonify({"catalog": CATALOG})
 
+# Обновленный маршрут добавления объекта (теперь с фото)
 @app.route('/add_catalog', methods=['POST', 'OPTIONS'])
 def add_catalog():
     if request.method == 'OPTIONS': return '', 204
     try:
+        title = request.form.get('title', 'Без названия')
+        desc = request.form.get('description', '')
+        price = request.form.get('price', '')
+        
+        media_paths = []
+        if 'images' in request.files:
+            for file in request.files.getlist('images'):
+                if file.filename:
+                    path = os.path.join('/tmp', secure_filename(file.filename))
+                    file.save(path)
+                    media_paths.append((path, 'image'))
+
         new_item = {
             "id": str(int(time.time())), 
-            "title": request.form.get('title', 'Без названия'), 
-            "description": request.form.get('description', ''), 
-            "price": request.form.get('price', '')
+            "title": title, 
+            "description": desc, 
+            "price": price,
+            "media_paths": media_paths # Сохраняем пути к фото
         }
         CATALOG.append(new_item)
+        print(f"✅ Объект добавлен в каталог: {title}", flush=True)
         return jsonify({"status": "ok"}), 200
     except Exception as e: return jsonify({"status": "error"}), 500
 
@@ -125,6 +137,7 @@ def submit_ad():
             item = next((i for i in CATALOG if i['id'] == catalog_id), None)
             if item:
                 text = f"🏠 {item['title']}\n\n{item['description']}\n\n💰 Цена: {item['price']}"
+                media_paths = item.get('media_paths', [])
             else: return jsonify({"status": "error"}), 404
         else:
             text = request.form.get('text', 'Пусто')
@@ -157,8 +170,8 @@ def submit_ad():
         print(f"!! Ошибка: {e}", flush=True)
         return jsonify({"status": "error"}), 500
 
-# --- БОТ ---
 def run_bot():
+    # ... (этот код без изменений, он ловит группы)
     print("🚀 Бот запущен...", flush=True)
     last_marker = None
     while True:
@@ -177,7 +190,6 @@ def run_bot():
                             if not is_dialog and chat_id not in [c['id'] for c in KNOWN_CHATS]:
                                 title = update.get("chat", {}).get("title") or f"Группа {chat_id}"
                                 KNOWN_CHATS.append({"id": chat_id, "title": title})
-                                print(f"✅ НОВЫЙ ЧАТ: {title}", flush=True)
                                 send_max_message(chat_id, "Привет! Я бот НЕПРОСТОПОСТ.")
                         if update.get("update_type") == "bot_started":
                             send_max_message(update.get("chat_id"), "Привет! Добавь меня в группу.")
