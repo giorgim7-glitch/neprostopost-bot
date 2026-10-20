@@ -19,6 +19,7 @@ MY_CHAT_ID = 505757849
 KNOWN_CHATS = []
 SCHEDULED_JOBS = []
 
+# Часовой пояс (Москва)
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 scheduler = BackgroundScheduler(timezone=MOSCOW_TZ)
 scheduler.start()
@@ -27,7 +28,7 @@ headers = {"Authorization": TOKEN}
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# --- ЗАГРУЗКА ФАЙЛА (ИСПРАВЛЕНА) ---
+# --- 1. ЗАГРУЗКА ФАЙЛА В MAX ---
 def upload_file_to_max(filepath, file_type='image'):
     try:
         upload_url_api = f"{BASE_URL}/uploads"
@@ -42,7 +43,7 @@ def upload_file_to_max(filepath, file_type='image'):
         if not upload_url: return None
 
         with open(filepath, 'rb') as f:
-            files = {'data': f} # ВАЖНО: поле называется 'data'
+            files = {'file': f}
             upload_res = requests.post(upload_url, files=files, verify=False)
             
             if upload_res.status_code == 200:
@@ -67,6 +68,7 @@ def upload_file_to_max(filepath, file_type='image'):
         print(f"❌ Исключение: {e}", flush=True)
     return None
 
+# --- 2. ОТПРАВКА СООБЩЕНИЯ ---
 def send_max_message(chat_id, text, media_paths=None):
     try:
         attachments = []
@@ -87,18 +89,18 @@ def send_max_message(chat_id, text, media_paths=None):
         print("-> Ошибка отправки:", e, flush=True)
         return False
 
+# --- 3. ПЛАНИРОВЩИК ---
 def scheduled_job(chat_id, text, media_paths, job_id, is_daily):
     print(f"⏰ СРАБОТАЛ ПЛАНИРОВЩИК (ID: {job_id})", flush=True)
     send_max_message(chat_id, text, media_paths)
     
-    # УДАЛЯЕМ ЗАДАЧУ, ТОЛЬКО ЕСЛИ ОНА НЕ ЕЖЕДНЕВНАЯ
+    # Если задача не ежедневная, удаляем её из списка
     if is_daily is False:
         global SCHEDULED_JOBS
         SCHEDULED_JOBS = [j for j in SCHEDULED_JOBS if j['id'] != job_id]
         print(f"🗑️ Разовая задача {job_id} удалена.", flush=True)
-    else:
-        print(f"🔄 Ежедневная задача {job_id} остается в списке.", flush=True)
 
+# --- 4. МАРШРУТЫ ---
 @app.route('/')
 def home(): return "Сервер работает!"
 
@@ -117,7 +119,6 @@ def submit_ad():
         time_str = request.form.get('time', '10:00')
         date_str = request.form.get('date', '')
         
-        # ЖЕСТКО ПРИВОДИМ К БУЛЕВУ ЗНАЧЕНИЮ
         is_daily_str = request.form.get('daily', 'false')
         is_daily = True if is_daily_str in ['true', 'True', 'on', '1'] else False
 
@@ -156,4 +157,57 @@ def submit_ad():
         print(f"!! Ошибка: {e}", flush=True)
         return jsonify({"status": "error"}), 500
 
-# ... run_bot() вставь из предыдущего сообщения ...
+# --- 5. ЦИКЛ БОТА (ЛОВИМ ГРУППЫ) ---
+def run_bot():
+    print("🚀 Бот НЕПРОСТОПОСТ запущен...", flush=True)
+    last_marker = None
+    while True:
+        try:
+            params = {"timeout": 30, "types": "message_created,bot_started"}
+            if last_marker: params["marker"] = last_marker
+            
+            response = requests.get(f"{BASE_URL}/updates", headers=headers, params=params, verify=False)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if "marker" in data: last_marker = data["marker"]
+                
+                if "updates" in data:
+                    for update in data["updates"]:
+                        update_type = update.get("update_type")
+                        chat_id = update.get("chat_id")
+                        if not chat_id and update.get("message"):
+                            chat_id = update["message"].get("recipient", {}).get("chat_id")
+
+                        if chat_id:
+                            is_dialog = False
+                            if update.get("message") and update["message"].get("recipient", {}).get("chat", {}).get("type") == "dialog":
+                                is_dialog = True
+                            elif update.get("chat") and update["chat"].get("type") == "dialog":
+                                is_dialog = True
+
+                            if not is_dialog:
+                                if chat_id not in [c['id'] for c in KNOWN_CHATS]:
+                                    title = f"Группа {chat_id}"
+                                    if update.get("chat") and update["chat"].get("title"):
+                                        title = update["chat"]["title"]
+                                    elif update.get("message") and update["message"].get("recipient", {}).get("chat", {}).get("title"):
+                                        title = update["message"]["recipient"]["chat"]["title"]
+                                    
+                                    KNOWN_CHATS.append({"id": chat_id, "title": title})
+                                    print(f"✅ НОВЫЙ ЧАТ ДОБАВЛЕН: {title} ({chat_id})", flush=True)
+                                    send_max_message(chat_id, "Привет! Я бот НЕПРОСТОПОСТ. Теперь я буду публиковать здесь ваши объявления по расписанию.")
+                                    
+                        if update_type == "bot_started":
+                            send_max_message(update.get("chat_id"), "Привет! Добавь меня в группу и сделай админом, чтобы я мог рассылать объявления.")
+        except Exception as e:
+            print("Ошибка цикла бота:", e, flush=True)
+            time.sleep(5)
+        time.sleep(1)
+
+if __name__ == '__main__':
+    t = Thread(target=run_bot)
+    t.daemon = True
+    t.start()
+    port = int(os.environ.get('PORT', 3000))
+    app.run(host='0.0.0.0', port=port)
