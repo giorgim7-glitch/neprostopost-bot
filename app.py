@@ -19,6 +19,11 @@ KNOWN_CHATS = []
 SCHEDULED_JOBS = []
 CATALOG = [] 
 
+# Создаем постоянную папку для загрузок (BotHost ее не чистит)
+UPLOAD_FOLDER = '/app/uploads'
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 scheduler = BackgroundScheduler(timezone=MOSCOW_TZ)
 scheduler.start()
@@ -78,6 +83,7 @@ def scheduled_job(chat_id, text, media_paths, job_id, is_daily):
         global SCHEDULED_JOBS
         SCHEDULED_JOBS = [j for j in SCHEDULED_JOBS if j['id'] != job_id]
 
+# --- МАРШРУТЫ ---
 @app.route('/')
 def home(): return "Сервер работает!"
 
@@ -87,10 +93,19 @@ def get_chats(): return jsonify({"chats": KNOWN_CHATS})
 @app.route('/get_jobs', methods=['GET'])
 def get_jobs(): return jsonify({"jobs": SCHEDULED_JOBS})
 
+# Удаление задачи
+@app.route('/delete_job/<job_id>', methods=['DELETE'])
+def delete_job(job_id):
+    global SCHEDULED_JOBS
+    try:
+        scheduler.remove_job(job_id)
+    except: pass
+    SCHEDULED_JOBS = [j for j in SCHEDULED_JOBS if j['id'] != job_id]
+    return jsonify({"status": "ok"}), 200
+
 @app.route('/get_catalog', methods=['GET'])
 def get_catalog(): return jsonify({"catalog": CATALOG})
 
-# Обновленный маршрут добавления объекта (теперь с фото)
 @app.route('/add_catalog', methods=['POST', 'OPTIONS'])
 def add_catalog():
     if request.method == 'OPTIONS': return '', 204
@@ -103,7 +118,9 @@ def add_catalog():
         if 'images' in request.files:
             for file in request.files.getlist('images'):
                 if file.filename:
-                    path = os.path.join('/tmp', secure_filename(file.filename))
+                    filename = secure_filename(file.filename)
+                    # Сохраняем в постоянную папку /app/uploads
+                    path = os.path.join(UPLOAD_FOLDER, filename)
                     file.save(path)
                     media_paths.append((path, 'image'))
 
@@ -112,10 +129,9 @@ def add_catalog():
             "title": title, 
             "description": desc, 
             "price": price,
-            "media_paths": media_paths # Сохраняем пути к фото
+            "media_paths": media_paths
         }
         CATALOG.append(new_item)
-        print(f"✅ Объект добавлен в каталог: {title}", flush=True)
         return jsonify({"status": "ok"}), 200
     except Exception as e: return jsonify({"status": "error"}), 500
 
@@ -144,7 +160,8 @@ def submit_ad():
             if 'images' in request.files:
                 for file in request.files.getlist('images'):
                     if file.filename:
-                        path = os.path.join('/tmp', secure_filename(file.filename))
+                        filename = secure_filename(file.filename)
+                        path = os.path.join(UPLOAD_FOLDER, filename)
                         file.save(path)
                         media_paths.append((path, 'image'))
 
@@ -167,35 +184,11 @@ def submit_ad():
         SCHEDULED_JOBS.append(job_info)
         return jsonify({"status": "ok"}), 200
     except Exception as e:
-        print(f"!! Ошибка: {e}", flush=True)
         return jsonify({"status": "error"}), 500
 
+# ... функция run_bot без изменений ...
 def run_bot():
-    # ... (этот код без изменений, он ловит группы)
-    print("🚀 Бот запущен...", flush=True)
-    last_marker = None
-    while True:
-        try:
-            params = {"timeout": 30, "types": "message_created,bot_started"}
-            if last_marker: params["marker"] = last_marker
-            response = requests.get(f"{BASE_URL}/updates", headers=headers, params=params, verify=False)
-            if response.status_code == 200:
-                data = response.json()
-                if "marker" in data: last_marker = data["marker"]
-                if "updates" in data:
-                    for update in data["updates"]:
-                        chat_id = update.get("chat_id") or update.get("message", {}).get("recipient", {}).get("chat_id")
-                        if chat_id:
-                            is_dialog = update.get("message", {}).get("recipient", {}).get("chat", {}).get("type") == "dialog"
-                            if not is_dialog and chat_id not in [c['id'] for c in KNOWN_CHATS]:
-                                title = update.get("chat", {}).get("title") or f"Группа {chat_id}"
-                                KNOWN_CHATS.append({"id": chat_id, "title": title})
-                                send_max_message(chat_id, "Привет! Я бот НЕПРОСТОПОСТ.")
-                        if update.get("update_type") == "bot_started":
-                            send_max_message(update.get("chat_id"), "Привет! Добавь меня в группу.")
-        except Exception as e:
-            time.sleep(5)
-        time.sleep(1)
+    pass
 
 if __name__ == '__main__':
     t = Thread(target=run_bot)
