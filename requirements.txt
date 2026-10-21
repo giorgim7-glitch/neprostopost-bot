@@ -1,7 +1,3 @@
-Flask
-Flask-CORS
-requests
-gunicorn
-apscheduler
-werkzeug
-pytz
+Flask>=3.0,<4
+flask-cors>=4,<6
+requests>=2.31,<3
