@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <!-- Адрес сервера Ботхост: без /api и без слеша в конце. -->
+    <meta name="neprostopost-api" content="https://bot-1792478387-3401-gogamisabi.bothost.tech">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Непростопост</title>
+    <script src="https://st.max.ru/js/max-web-app.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root { --bg: #F8F9FA; --card: #FFFFFF; --text: #1A1D23; --muted: #8B95A5; --accent: #0F766E; --accent-light: #CCFBF1; --border: #E5E7EB; --shadow: 0 4px 20px rgba(0,0,0,0.04); }
+        body { font-family: 'Manrope', sans-serif; background: var(--bg); margin: 0; padding: 0; color: var(--text); padding-bottom: 90px; }
+        .header { padding: 20px; display: flex; justify-content: space-between; align-items: center; background: var(--bg); position: sticky; top: 0; z-index: 10; }
+        .header h1 { font-size: 20px; font-weight: 800; margin: 0; }
+        .avatar { width: 36px; height: 36px; border-radius: 50%; background: #E5E7EB; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+        .container { padding: 0 20px; max-width: 600px; margin: 0 auto; }
+        .screen { display: none; }
+        .screen.active { display: block; animation: fadeIn 0.3s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+
+        .hero-card { background: linear-gradient(135deg, #0F172A 0%, #0F766E 100%); color: white; padding: 24px; border-radius: 24px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end; }
+        .hero-card h2 { margin: 0; font-size: 36px; font-weight: 800; line-height: 1; }
+        .hero-card p { margin: 5px 0 0 0; font-size: 13px; opacity: 0.9; }
+
+        .stats-row { display: flex; justify-content: space-between; padding: 15px 0; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+        .stat-item { text-align: center; flex: 1; }
+        .stat-item:not(:last-child) { border-right: 1px solid var(--border); }
+        .stat-num { font-size: 20px; font-weight: 800; }
+        .stat-name { font-size: 11px; color: var(--muted); margin-top: 4px; }
+        .section-title { font-size: 15px; font-weight: 700; margin-bottom: 15px; display: flex; justify-content: space-between; }
+        .section-title a { color: var(--accent); font-size: 12px; text-decoration: none; font-weight: 600; }
+        .action-btn { background: var(--card); padding: 16px; border-radius: 16px; display: flex; align-items: center; gap: 15px; margin-bottom: 10px; box-shadow: var(--shadow); cursor: pointer; }
+        .action-icon { width: 40px; height: 40px; border-radius: 10px; background: var(--bg); display: flex; align-items: center; justify-content: center; font-size: 18px; color: var(--accent); }
+        .action-text { font-weight: 700; font-size: 14px; flex: 1; }
+        .action-sub { font-size: 12px; color: var(--muted); font-weight: 400; margin-top: 2px; }
+        .action-arrow { color: var(--muted); font-size: 18px; }
+
+        .tab-switch { display: flex; background: var(--bg); border-radius: 12px; padding: 4px; margin-bottom: 20px; border: 1px solid var(--border); }
+        .tab-switch-btn { flex: 1; text-align: center; padding: 10px; font-size: 13px; font-weight: 700; color: var(--muted); border-radius: 8px; cursor: pointer; }
+        .tab-switch-btn.active { background: var(--card); color: var(--text); box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+
+        .group-card { display: flex; align-items: center; gap: 15px; padding: 15px 0; border-bottom: 1px solid var(--border); }
+        .group-icon { width: 44px; height: 44px; border-radius: 12px; background: var(--text); color: white; display: flex; align-items: center; justify-content: center; font-size: 20px; }
+        .group-info { flex: 1; }
+        .group-name { font-weight: 700; font-size: 14px; }
+        .group-members { font-size: 12px; color: var(--muted); margin-top: 2px; }
+        .status-dot { color: #10B981; font-size: 12px; font-weight: 700; display: flex; align-items: center; gap: 4px; }
+
+        .calendar-row { display: flex; justify-content: space-between; margin-bottom: 20px; }
+        .cal-day { text-align: center; font-size: 11px; color: var(--muted); }
+        .cal-num { font-size: 16px; font-weight: 700; color: var(--text); margin-top: 5px; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 50%; }
+        .cal-day.active .cal-num { background: var(--text); color: white; }
+        .cal-day.active .cal-name { color: var(--text); font-weight: 700; }
+
+        .task-card { background: var(--card); padding: 16px; border-radius: 20px; margin-bottom: 12px; box-shadow: var(--shadow); display: flex; align-items: center; gap: 15px; }
+        .task-time { font-size: 13px; font-weight: 800; color: var(--text); width: 45px; text-align: center; }
+        .task-icon-box { width: 44px; height: 44px; border-radius: 14px; background: var(--accent-light); display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
+        .task-content { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 3px; }
+        .task-title { font-weight: 800; font-size: 15px; color: var(--text); line-height: 1.2; }
+        .task-sub { font-size: 13px; color: var(--muted); font-weight: 500; }
+        .task-phone { font-size: 13px; color: var(--accent); font-weight: 700; display: flex; align-items: center; gap: 5px; margin-top: 2px; }
+        .badge { font-size: 11px; padding: 6px 10px; border-radius: 10px; background: var(--accent-light); color: var(--accent); font-weight: 800; flex-shrink: 0; align-self: flex-start; margin-top: 2px; }
+
+        .search-bar { background: var(--card); border-radius: 12px; padding: 12px 15px; display: flex; align-items: center; gap: 10px; color: var(--muted); margin-bottom: 15px; border: 1px solid var(--border); }
+        .filter-scroll { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 15px; margin-bottom: 15px; scrollbar-width: none; }
+        .filter-btn { padding: 8px 16px; background: var(--card); border: 1px solid var(--border); border-radius: 20px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+        .filter-btn.active { background: var(--text); color: white; border-color: var(--text); }
+
+        .obj-card { background: var(--card); border-radius: 20px; margin-bottom: 20px; box-shadow: var(--shadow); overflow: hidden; }
+        .obj-img { width: 100%; height: 200px; background: #E5E7EB; object-fit: cover; }
+        .obj-info { padding: 15px; position: relative; }
+        .obj-tag { position: absolute; top: -15px; left: 15px; background: var(--card); padding: 5px 10px; border-radius: 8px; font-size: 11px; font-weight: 800; color: var(--text); box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .obj-title { font-weight: 800; font-size: 18px; margin: 0; }
+        .obj-addr { font-size: 12px; color: var(--muted); margin: 5px 0; display: flex; align-items: center; gap: 5px; }
+        .obj-price { font-weight: 800; font-size: 18px; margin-top: 10px; }
+        .obj-desc { font-size: 12px; color: var(--muted); margin-top: 5px; }
+
+        .profile-head { text-align: center; margin-bottom: 20px; }
+        .profile-avatar { width: 80px; height: 80px; border-radius: 50%; background: var(--border); margin: 0 auto 10px; }
+        .profile-name { font-size: 18px; font-weight: 800; margin: 0; }
+        .profile-role { font-size: 12px; color: var(--muted); }
+        .pro-badge { background: var(--text); color: white; font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 4px; display: inline-block; margin-top: 5px; }
+        .profile-stats { display: flex; background: var(--card); border-radius: 16px; padding: 15px 0; margin-bottom: 20px; box-shadow: var(--shadow); }
+        .profile-stats .stat-item { flex: 1; text-align: center; }
+        .profile-stats .stat-num { font-size: 18px; font-weight: 800; }
+        .profile-stats .stat-name { font-size: 10px; color: var(--muted); margin-top: 4px; }
+        .menu-list { background: var(--card); border-radius: 16px; overflow: hidden; margin-bottom: 20px; box-shadow: var(--shadow); }
+        .menu-item { padding: 16px; display: flex; align-items: center; gap: 15px; border-bottom: 1px solid var(--border); font-size: 14px; font-weight: 600; }
+        .menu-item:last-child { border-bottom: none; }
+        .menu-icon { font-size: 20px; color: var(--muted); }
+        .menu-arrow { margin-left: auto; color: var(--muted); }
+        .btn-logout { display: block; width: 100%; padding: 16px; background: #FEE2E2; color: #EF4444; text-align: center; border-radius: 16px; font-weight: 700; margin-top: 20px; text-decoration: none; }
+
+        .tab-bar { position: fixed; bottom: 0; left: 0; width: 100%; height: 85px; background: var(--card); border-top: 1px solid var(--border); display: flex; justify-content: space-around; align-items: center; z-index: 100; padding-bottom: env(safe-area-inset-bottom); }
+        .tab-item { text-align: center; color: var(--muted); font-size: 10px; font-weight: 700; cursor: pointer; flex: 1; padding: 10px; }
+        .tab-item.active { color: var(--accent); }
+        .tab-icon { display: block; font-size: 24px; margin-bottom: 4px; }
+
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 5px; }
+        .form-group input, .form-group textarea, .form-group select { width: 100%; padding: 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 12px; font-size: 14px; box-sizing: border-box; font-family: 'Manrope'; }
+        .btn-main { width: 100%; padding: 16px; background: var(--text); color: white; border: none; border-radius: 16px; font-size: 15px; font-weight: 700; margin-top: 10px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div id="appNotice" role="status" style="padding:12px 20px;background:#CCFBF1;" hidden></div>
+
+    <div class="header">
+        <h1>Непростопост</h1>
+        <div style="display:flex; gap:10px; align-items:center;">
+            <div style="font-size:20px; position:relative;">🔔<span style="position:absolute; top:0; right:0; width:8px; height:8px; background:red; border-radius:50%;"></span></div>
+            <div class="avatar" id="userAvatar">👤</div>
+        </div>
+    </div>
+
+    <!-- ГЛАВНАЯ -->
+    <div id="screen-dashboard" class="screen active container">
+        <div class="hero-card">
+            <div><p>В планере</p><h2 id="dashTasksCount">0</h2><p>задач и рассылок</p></div>
+            <div style="font-size: 30px;">→</div>
+        </div>
+        <div class="stats-row">
+            <div class="stat-item"><div class="stat-num" id="statGroups">0</div><div class="stat-name">Групп</div></div>
+            <div class="stat-item"><div class="stat-num" id="statClients">0</div><div class="stat-name">Клиентов</div></div>
+            <div class="stat-item"><div class="stat-num" style="color: #EF4444;" id="statOverdue">0</div><div class="stat-name">Просрочено</div></div>
+        </div>
+        <div class="section-title">Быстрые действия</div>
+        <div class="action-btn" onclick="switchTab('broadcast', document.querySelectorAll('.tab-item')[1])"><div class="action-icon">🚀</div><div class="action-text">Создать рассылку<div class="action-sub">В свои группы</div></div><div class="action-arrow">›</div></div>
+        <div class="action-btn" onclick="switchTab('clients', document.querySelectorAll('.tab-item')[2])"><div class="action-icon">📅</div><div class="action-text">Добавить клиента<div class="action-sub">В планер</div></div><div class="action-arrow">›</div></div>
+        <div class="action-btn" onclick="switchTab('catalog', document.querySelectorAll('.tab-item')[3])"><div class="action-icon">🏢</div><div class="action-text">Новый объект<div class="action-sub">В каталог</div></div><div class="action-arrow">›</div></div>
+        <div class="section-title" style="margin-top:25px;">Ближайшие касания <a href="#" onclick="switchTab('clients', document.querySelectorAll('.tab-item')[2])">Все</a></div>
+        <div id="dashboardTasks"></div>
+    </div>
+
+    <!-- РАССЫЛКИ -->
+    <div id="screen-broadcast" class="screen container">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+            <h2 style="margin:0; font-size:24px; font-weight:800;">Рассылки</h2>
+            <div style="width:36px; height:36px; background:var(--text); color:white; border-radius:50%; display:flex; align-items:center; justify-content:center; cursor:pointer;" onclick="document.getElementById('broadcastForm').style.display='block'">+</div>
+        </div>
+        <div class="form-group"><label for="groupId">ID группы MAX (бот должен быть администратором)</label><input id="groupId" placeholder="Например, -123456"></div><button class="btn-main" onclick="connectChat()">Подключить группу</button>
+        <div id="groupsList"></div>
+        <div class="section-title" style="margin-top:30px;">Рассылки</div>
+        <div id="broadcastJobs"></div>
+        <div id="broadcastForm" style="display:none; margin-top:20px; background:var(--card); padding:20px; border-radius:20px;">
+            <h3>Новая рассылка</h3>
+            <div class="form-group"><label>Группа</label><select id="chatSelect"></select></div>
+            <div class="form-group"><label>Текст</label><textarea id="adText" style="height:100px;"></textarea></div>
+            <div class="form-group"><label>Фото</label><input type="file" id="adImages" accept="image/jpeg,image/png,image/webp,image/gif" multiple></div>
+            <div class="form-group"><label>Дата и время отправки</label><input type="datetime-local" id="adRunAt" required></div><button class="btn-main" onclick="sendBroadcast()">Запланировать</button>
+        </div>
+    </div>
+
+    <!-- ПЛАНЕР -->
+    <div id="screen-clients" class="screen container">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+            <h2 style="margin:0; font-size:24px; font-weight:800;">Планер</h2>
+            <div style="display:flex; gap:15px; font-size:20px;">📅 <span style="font-weight:300;">+</span></div>
+        </div>
+        <p>Запланированные касания — время на вашем устройстве.</p>
+        <div id="clientsList"></div>
+        <button class="btn-main" style="margin-top:20px;" onclick="document.getElementById('addClientForm').style.display='block'">+ Добавить касание</button>
+
+        <div id="addClientForm" style="display:none; margin-top:20px; background:var(--card); padding:20px; border-radius:20px;">
+            <h3>Новое касание</h3>
+            <div class="form-group"><label>Имя клиента</label><input type="text" id="clientName"></div>
+            <div class="form-group"><label>Номер телефона</label><input type="tel" id="clientPhone" placeholder="+7 900 000-00-00"></div>
+            <div class="form-group"><label>Действие</label><select id="clientType"><option>Звонок</option><option>Встреча</option><option>Сообщение</option></select></div>
+            <div class="form-group"><label>Детали</label><input type="text" id="clientText" placeholder="ЖК Иначе"></div>
+            <div class="form-group"><label>Дата и время</label><input type="date" id="clientDate"><input type="time" id="clientTime" style="margin-top:10px;"></div>
+            <button class="btn-main" onclick="addClient()">Сохранить</button>
+        </div>
+    </div>
+
+    <!-- КАТАЛОГ -->
+    <div id="screen-catalog" class="screen container">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+            <h2 style="margin:0; font-size:24px; font-weight:800;">Каталог</h2>
+            <div style="font-size:20px; cursor:pointer;" onclick="document.getElementById('addCatalogForm').style.display='block'">+</div>
+        </div>
+        <div class="form-group"><label for="catalogSearch">Поиск по объектам</label><input id="catalogSearch" type="search" oninput="renderCatalog()" placeholder="Название или адрес"></div>
+        <div id="catalogList"></div>
+        <div id="addCatalogForm" style="display:none; margin-top:20px; background:var(--card); padding:20px; border-radius:20px;">
+            <h3>Новый объект</h3>
+            <div class="form-group"><label>Название (ЖК)</label><input type="text" id="catTitle"></div>
+            <div class="form-group"><label>Адрес</label><input type="text" id="catAddress" placeholder="Краснодар, ул. Ленина"></div>
+            <div class="form-group"><label>Цена</label><input type="text" id="catPrice" placeholder="от 5 000 000 ₽"></div>
+            <div class="form-group"><label>Описание</label><textarea id="catDescription"></textarea></div><div class="form-group"><label>Тег</label><select id="catTag"><option>Новостройка</option><option>У моря</option><option>Бизнес-класс</option></select></div>
+            <div class="form-group"><label>Фото</label><input type="file" id="catImages" accept="image/jpeg,image/png,image/webp,image/gif" multiple></div>
+            <button class="btn-main" onclick="saveCatalogItem()">Сохранить</button>
+        </div>
+    </div>
+
+    <!-- ПРОФИЛЬ -->
+    <div id="screen-profile" class="screen container">
+        <div class="profile-head">
+            <div class="profile-avatar" id="profAvatar"></div>
+            <h2 class="profile-name" id="profName">Вход через MAX</h2>
+            <div class="profile-role">Риелтор</div>
+            <div class="pro-badge" id="subscriptionLabel">—</div>
+        </div>
+        <div class="profile-stats">
+            <div class="stat-item"><div class="stat-num" id="profGroups">0</div><div class="stat-name">Групп</div></div>
+            <div class="stat-item"><div class="stat-num" id="profClients">0</div><div class="stat-name">Клиентов</div></div>
+            <div class="stat-item"><div class="stat-num" id="profSubs">0</div><div class="stat-name">Подписчиков</div></div>
+        </div>
+        <div class="menu-list">
+            <div class="menu-item" onclick="switchTab('broadcast', document.querySelectorAll('.tab-item')[1])"><span class="menu-icon">👥</span> Мои группы <span class="menu-arrow">›</span></div>
+            <div class="menu-item">Касания сохраняются в планере. Push-уведомления не подключены.</div>
+            <div class="menu-item" onclick="alert('Оплата скоро будет доступна!')"><span class="menu-icon">💳</span> Реквизиты и оплата <span class="menu-arrow">›</span></div>
+            <div class="menu-item" onclick="alert('Откройте приложение из бота MAX. Для подключения группы добавьте бота администратором и укажите ID группы. Время отправки задаётся по часовому поясу устройства.')"><span class="menu-icon">❓</span> Помощь <span class="menu-arrow">›</span></div>
+        </div>
+        <button class="btn-logout" onclick="logout()">Выйти</button>
+    </div>
+
+    <!-- МЕНЮ -->
+    <div class="tab-bar">
+        <div class="tab-item active" onclick="switchTab('dashboard', this)"><span class="tab-icon">🏠</span>Главная</div>
+        <div class="tab-item" onclick="switchTab('broadcast', this)"><span class="tab-icon">🚀</span>Рассылки</div>
+        <div class="tab-item" onclick="switchTab('clients', this)"><span class="tab-icon">👥</span>Планер</div>
+        <div class="tab-item" onclick="switchTab('catalog', this)"><span class="tab-icon">📦</span>Каталог</div>
+        <div class="tab-item" onclick="switchTab('profile', this)"><span class="tab-icon">👤</span>Профиль</div>
+    </div>
+
+    <script>
+'use strict';
+// Empty setting uses this website; standalone HTML sets the backend HTTPS origin.
+const API_ORIGIN = new URL(document.querySelector('meta[name="neprostopost-api"]')?.content || location.origin).origin;
+let sessionToken = sessionStorage.getItem('neprostopost.session') || '';
+let authenticated = false;
+let catalogItems = [];
+let imageObjects = [];
+const $ = id => document.getElementById(id);
+const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const dateLabel = value => new Date(value).toLocaleString('ru-RU', {dateStyle:'short',timeStyle:'short'});
+function notice(message, error = false) {
+    $('appNotice').hidden = !message;
+    $('appNotice').textContent = message;
+    $('appNotice').style.background = error ? '#FEE2E2' : '#CCFBF1';
+}
+async function api(path, options = {}) {
+    const headers = new Headers(options.headers || {});
+    if (sessionToken) headers.set('Authorization', 'Bearer ' + sessionToken);
+    const response = await fetch(API_ORIGIN + '/api' + path, {...options, headers});
+    const data = await response.json().catch(() => ({message:'Некорректный ответ сервера'}));
+    if (!response.ok) {
+        if (response.status === 401) {
+            authenticated = false;
+            sessionToken = '';
+            sessionStorage.removeItem('neprostopost.session');
+            notice(data.message || 'Откройте приложение заново через MAX.', true);
+        }
+        throw new Error(data.message || `Ошибка ${response.status}`);
+    }
+    return data;
+}
+function requireLogin() {
+    if (!authenticated) { notice('Откройте Mini App из бота MAX, чтобы войти.', true); return false; }
+    return true;
+}
+async function action(fn) {
+    if (!requireLogin()) return;
+    const buttons = [...document.querySelectorAll('button')];
+    buttons.forEach(b => b.disabled = true);
+    try { await fn(); } catch (error) { notice(error.message || 'Не удалось связаться с сервером', true); }
+    finally { buttons.forEach(b => b.disabled = false); }
+}
+function switchTab(tabName, element) {
+    document.querySelectorAll('.screen').forEach(el => el.classList.remove('active'));
+    $('screen-' + tabName).classList.add('active');
+    document.querySelectorAll('.tab-item').forEach(el => el.classList.remove('active'));
+    element?.classList.add('active');
+    if (!authenticated) return;
+    const loads = {broadcast:loadChats, catalog:loadCatalogList, dashboard:loadDashboard, clients:loadClients, profile:loadProfile};
+    loads[tabName]?.().catch(error => notice(error.message, true));
+}
+const statuses = {scheduled:'Запланировано', processing:'Отправляется', sent:'Отправлено', failed:'Ошибка отправки', uncertain:'Проверьте доставку в MAX', cancelled:'Отменено'};
+function taskMarkup(job) {
+    const id = escapeHTML(job.id);
+    const type = job.type === 'group' ? 'group' : 'client';
+    return `<div class="task-card"><div class="task-content"><div class="task-title">${escapeHTML(job.text)}</div><div class="task-sub">${escapeHTML(dateLabel(job.schedule))}</div><div>${escapeHTML(statuses[job.status] || job.status)}</div>${job.error ? `<div>${escapeHTML(job.error)}</div>` : ''}</div>${job.status !== 'processing' ? `<button aria-label="Удалить задачу" data-delete-job="${id}" data-job-type="${type}">Удалить</button>` : ''}</div>`;
+}
+async function loadDashboard() {
+    const [data, stats] = await Promise.all([api('/get_jobs'), api('/get_stats')]);
+    const pending = data.jobs.filter(j => !['sent','cancelled'].includes(j.status));
+    $('dashTasksCount').textContent = pending.length;
+    $('statGroups').textContent = stats.groups;
+    $('statClients').textContent = stats.clients;
+    $('statOverdue').textContent = pending.filter(j => new Date(j.schedule) < new Date()).length;
+    $('dashboardTasks').innerHTML = pending.slice(0, 5).map(taskMarkup).join('') || '<p>Нет активных задач</p>';
+}
+async function loadChats() {
+    const [data, tasks] = await Promise.all([api('/get_chats'), api('/get_jobs')]);
+    $('chatSelect').replaceChildren(...data.chats.map(chat => new Option(chat.title, chat.id)));
+    $('groupsList').innerHTML = data.chats.map(chat => `<div class="group-card"><div class="group-info"><div class="group-name">${escapeHTML(chat.title)}</div><div class="group-members">ID: ${escapeHTML(chat.id)}</div></div><button data-disconnect="${escapeHTML(chat.id)}">Отключить</button></div>`).join('') || '<p>Подключите группу по её ID.</p>';
+    $('broadcastJobs').innerHTML = tasks.jobs.filter(j => j.type === 'group').map(taskMarkup).join('') || '<p>Рассылок пока нет</p>';
+}
+async function connectChat() {
+    await action(async () => {
+        const chatId = $('groupId').value.trim();
+        if (!/^-?\d+$/.test(chatId)) throw new Error('Введите числовой ID группы');
+        await api('/connect_chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({chat_id:chatId})});
+        $('groupId').value = '';
+        await loadChats(); notice('Группа подключена.');
+    });
+}
+async function loadClients() {
+    const data = await api('/get_clients');
+    $('clientsList').innerHTML = data.clients.map(c => `<div class="task-card"><div class="task-content"><div class="task-title">${escapeHTML(c.type)}: ${escapeHTML(c.name)}</div><div class="task-sub">${escapeHTML(c.text)}</div><div>${escapeHTML(dateLabel(c.schedule_time))}</div><div class="task-phone">${escapeHTML(c.phone)}</div></div><button data-delete-job="${escapeHTML(c.id)}" data-job-type="client">Удалить</button></div>`).join('') || '<p>Пока нет запланированных касаний</p>';
+}
+function renderCatalog() {
+    imageObjects.forEach(URL.revokeObjectURL); imageObjects = [];
+    const query = $('catalogSearch').value.toLocaleLowerCase();
+    const items = catalogItems.filter(item => `${item.title} ${item.address} ${item.description}`.toLocaleLowerCase().includes(query));
+    $('catalogList').innerHTML = items.map(item => `<div class="obj-card"><div class="catalog-images" data-images="${escapeHTML(item.id)}"></div><div class="obj-info"><div class="obj-tag">${escapeHTML(item.tag)}</div><h3 class="obj-title">${escapeHTML(item.title)}</h3><div class="obj-addr">${escapeHTML(item.address)}</div><div class="obj-price">${escapeHTML(item.price)}</div><div class="obj-desc">${escapeHTML(item.description)}</div><button data-delete-catalog="${escapeHTML(item.id)}">Удалить объект</button></div></div>`).join('') || '<p>Объектов не найдено</p>';
+    for (const item of items) {
+        const container = [...document.querySelectorAll('[data-images]')].find(el => el.dataset.images === item.id);
+        for (const url of item.image_urls || []) {
+            // Bearer auth cannot be attached by <img>; fetch the backend image as a blob.
+            const parsed = new URL(url, API_ORIGIN);
+            if (parsed.origin !== API_ORIGIN) continue;
+            fetch(parsed.href, {headers:{Authorization:'Bearer ' + sessionToken}}).then(async response => {
+                if (!response.ok) throw new Error('Не удалось загрузить фото');
+                const blob = await response.blob();
+                if (!container.isConnected) return;
+                const objectURL = URL.createObjectURL(blob); imageObjects.push(objectURL);
+                const img = document.createElement('img'); img.className = 'obj-img'; img.alt = item.title; img.src = objectURL;
+                container.append(img);
+            }).catch(error => notice(error.message, true));
+        }
+    }
+}
+async function loadCatalogList() { catalogItems = (await api('/get_catalog')).catalog; renderCatalog(); }
+async function loadProfile() {
+    const [stats, profile] = await Promise.all([api('/get_stats'), api('/me')]);
+    $('profGroups').textContent = stats.groups; $('profClients').textContent = stats.clients;
+    $('profSubs').textContent = stats.subscribers ?? '—';
+    $('profName').textContent = profile.user.first_name || 'Пользователь MAX';
+    $('userAvatar').textContent = (profile.user.first_name || 'М')[0];
+    $('subscriptionLabel').textContent = profile.subscription === 'trial' ? `Пробный период до ${dateLabel(profile.trial_end)}` : 'Пробный период завершён';
+}
+function futureISO(value) {
+    const date = new Date(value);
+    if (!value || Number.isNaN(date.getTime()) || date <= new Date()) throw new Error('Выберите дату и время в будущем');
+    return date.toISOString();
+}
+function appendImages(form, input) {
+    for (const file of input.files) form.append('images', file);
+}
+async function sendBroadcast() {
+    await action(async () => {
+        if (!$('chatSelect').value || !$('adText').value.trim()) throw new Error('Выберите группу и напишите текст');
+        const form = new FormData(); form.append('chat_id', $('chatSelect').value); form.append('text', $('adText').value.trim());
+        form.append('run_at', futureISO($('adRunAt').value)); appendImages(form, $('adImages'));
+        const result = await api('/submit_ad', {method:'POST', body:form});
+        $('adText').value = ''; $('adImages').value = ''; $('broadcastForm').style.display = 'none';
+        await loadChats(); notice(result.message);
+    });
+}
+async function addClient() {
+    await action(async () => {
+        if (!$('clientName').value.trim() || !$('clientDate').value || !$('clientTime').value) throw new Error('Укажите имя, дату и время');
+        const form = new FormData();
+        for (const [field,id] of Object.entries({name:'clientName',phone:'clientPhone',text:'clientText',type:'clientType',date:'clientDate',time:'clientTime'})) form.append(field, $(id).value);
+        form.append('run_at', futureISO(`${$('clientDate').value}T${$('clientTime').value}`));
+        await api('/add_client', {method:'POST',body:form});
+        for (const id of ['clientName','clientPhone','clientText']) $(id).value = '';
+        $('addClientForm').style.display = 'none'; await loadClients(); notice('Касание сохранено в планере.');
+    });
+}
+async function saveCatalogItem() {
+    await action(async () => {
+        if (!$('catTitle').value.trim()) throw new Error('Введите название объекта');
+        const form = new FormData();
+        for (const [field,id] of Object.entries({title:'catTitle',address:'catAddress',price:'catPrice',tag:'catTag',description:'catDescription'})) form.append(field, $(id).value);
+        appendImages(form, $('catImages')); await api('/add_catalog', {method:'POST',body:form});
+        for (const id of ['catTitle','catAddress','catPrice','catDescription','catImages']) $(id).value = '';
+        $('addCatalogForm').style.display = 'none'; await loadCatalogList(); notice('Объект сохранён.');
+    });
+}
+async function logout() {
+    try { if (authenticated) await api('/auth/logout', {method:'POST'}); }
+    catch (error) { notice(error.message,true); return; }
+    sessionStorage.removeItem('neprostopost.session'); sessionStorage.setItem('neprostopost.signedout', '1');
+    sessionToken = ''; authenticated = false;
+    location.reload();
+}
+document.addEventListener('click', event => {
+    const button = event.target.closest('button');
+    if (!button) return;
+    if (button.dataset.deleteJob) action(async () => {
+        await api(`/delete_job/${encodeURIComponent(button.dataset.deleteJob)}/${button.dataset.jobType}`, {method:'DELETE'});
+        await Promise.all([loadDashboard(),loadClients(),loadChats()]); notice('Задача удалена.');
+    });
+    if (button.dataset.deleteCatalog) action(async () => {
+        await api(`/catalog/${encodeURIComponent(button.dataset.deleteCatalog)}`, {method:'DELETE'}); await loadCatalogList(); notice('Объект удалён.');
+    });
+    if (button.dataset.disconnect) action(async () => {
+        await api(`/groups/${encodeURIComponent(button.dataset.disconnect)}`, {method:'DELETE'}); await loadChats(); notice('Группа отключена, её ожидающие рассылки отменены.');
+    });
+});
+async function initialize() {
+    const webapp = window.WebApp;
+    webapp?.ready?.();
+    const date = new Date(Date.now() + 3600000);
+    const local = new Date(date.getTime() - date.getTimezoneOffset()*60000).toISOString();
+    $('clientDate').value = local.slice(0,10); $('clientTime').value = local.slice(11,16); $('adRunAt').value = local.slice(0,16);
+    if (sessionStorage.getItem('neprostopost.signedout')) {
+        notice('Вы вышли из аккаунта.');
+        const loginButton = document.createElement('button'); loginButton.textContent = 'Войти через MAX';
+        loginButton.addEventListener('click', () => { sessionStorage.removeItem('neprostopost.signedout'); initialize(); });
+        $('appNotice').append(' ', loginButton);
+        return;
+    }
+    try {
+        if (sessionToken) {
+            try { await api('/me'); authenticated = true; }
+            catch (error) { if (sessionToken) throw error; }
+        }
+        if (!authenticated) {
+            if (!webapp?.initData) { notice('Для входа откройте приложение из бота MAX.'); return; }
+            const data = await api('/auth/max', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({init_data:webapp.initData})});
+            sessionToken = data.token; sessionStorage.setItem('neprostopost.session', sessionToken); authenticated = true;
+        }
+        notice(''); await Promise.all([loadDashboard(),loadProfile()]);
+    } catch (error) { notice(error.message || 'Не удалось подключиться к серверу', true); }
+}
+initialize();
+
+setInterval(() => {
+    if (!authenticated || document.hidden) return;
+    const active = document.querySelector('.screen.active')?.id;
+    const refresh = {'screen-dashboard':loadDashboard,'screen-broadcast':loadChats};
+    refresh[active]?.().catch(error => notice(error.message, true));
+}, 15000);
+
+</script>
+</body>
+</html>

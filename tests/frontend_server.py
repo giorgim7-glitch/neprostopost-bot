@@ -9,6 +9,7 @@ from werkzeug.serving import make_server, WSGIRequestHandler
 with tempfile.TemporaryDirectory(prefix='neprostopost-frontend-') as data:
     os.environ['DATA_DIR'] = data
     os.environ['MAX_BOT_TOKEN'] = 'synthetic-test-key-not-a-real-token'
+    os.environ['FRONTEND_ORIGIN'] = 'https://frontend.example'
     import app
     from unittest.mock import Mock
     app.get_admin_group = lambda chat_id, user_id: True

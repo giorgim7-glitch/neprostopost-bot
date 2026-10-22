@@ -1,4 +1,6 @@
 'use strict';
+// Empty setting uses this website; standalone HTML sets the backend HTTPS origin.
+const API_ORIGIN = new URL(document.querySelector('meta[name="neprostopost-api"]')?.content || location.origin).origin;
 let sessionToken = sessionStorage.getItem('neprostopost.session') || '';
 let authenticated = false;
 let catalogItems = [];
@@ -14,7 +16,7 @@ function notice(message, error = false) {
 async function api(path, options = {}) {
     const headers = new Headers(options.headers || {});
     if (sessionToken) headers.set('Authorization', 'Bearer ' + sessionToken);
-    const response = await fetch('/api' + path, {...options, headers});
+    const response = await fetch(API_ORIGIN + '/api' + path, {...options, headers});
     const data = await response.json().catch(() => ({message:'Некорректный ответ сервера'}));
     if (!response.ok) {
         if (response.status === 401) {
@@ -89,10 +91,10 @@ function renderCatalog() {
     for (const item of items) {
         const container = [...document.querySelectorAll('[data-images]')].find(el => el.dataset.images === item.id);
         for (const url of item.image_urls || []) {
-            // Bearer auth cannot be attached by <img>; fetch same-origin image as a blob.
-            const parsed = new URL(url, location.origin);
-            if (parsed.origin !== location.origin) continue;
-            fetch(parsed.pathname, {headers:{Authorization:'Bearer ' + sessionToken}}).then(async response => {
+            // Bearer auth cannot be attached by <img>; fetch the backend image as a blob.
+            const parsed = new URL(url, API_ORIGIN);
+            if (parsed.origin !== API_ORIGIN) continue;
+            fetch(parsed.href, {headers:{Authorization:'Bearer ' + sessionToken}}).then(async response => {
                 if (!response.ok) throw new Error('Не удалось загрузить фото');
                 const blob = await response.blob();
                 if (!container.isConnected) return;

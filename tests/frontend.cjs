@@ -19,9 +19,13 @@ const initData = () => {
   values.hash=crypto.createHmac('sha256',secret).update(content).digest('hex');
   return new URLSearchParams(values).toString();
 };
-function createDOM(html,url,webapp) {
+function createDOM(html,url,webapp,apiOrigin) {
   const dom = new JSDOM(html,{url,runScripts:'outside-only'});
   const w=dom.window;
+  if (apiOrigin) {
+    const meta=w.document.querySelector('meta[name="neprostopost-api"]') || w.document.createElement('meta'); meta.name='neprostopost-api'; meta.content=apiOrigin;
+    w.document.head.append(meta);
+  }
   w.Headers=Headers; w.FormData=FormData;
   w.URL.createObjectURL=()=> 'blob:test-image'; w.URL.revokeObjectURL=()=>{};
   w.fetch=(resource,options)=>fetch(new URL(resource,url),options);
@@ -42,7 +46,13 @@ function createDOM(html,url,webapp) {
   await outside.window.addClient();
   assert.match(outside.window.document.getElementById('appNotice').textContent,/MAX/);
   outside.window.close();
-  const dom=createDOM(html,url,{ready(){},initData:initData()});
+  const preflight=await fetch(url+'/api/auth/max',{method:'OPTIONS',headers:{Origin:'https://frontend.example','Access-Control-Request-Method':'POST','Access-Control-Request-Headers':'content-type,authorization'}});
+  assert.equal(preflight.headers.get('access-control-allow-origin'),'https://frontend.example');
+  assert.match(preflight.headers.get('access-control-allow-headers'),/authorization/i);
+  const standalone=fs.readFileSync(path.join(root,'frontend/index.html'),'utf8');
+  assert.ok(!standalone.includes('src="/static/app.js"'));
+  assert.ok(standalone.includes('name="neprostopost-api"'));
+  const dom=createDOM(standalone,'https://frontend.example/',{ready(){},initData:initData()},url);
   const w=dom.window, $=id=>w.document.getElementById(id);
   await waitFor(()=>$('profName').textContent==='Тест');
   assert.ok(w.sessionStorage.getItem('neprostopost.session'));
@@ -78,5 +88,5 @@ function createDOM(html,url,webapp) {
   await assert.rejects(w.api('/me'));
   assert.equal(w.sessionStorage.getItem('neprostopost.session'),null);
   dom.window.close();
-  console.log('PASS: DOM + real HTTP API: outside MAX, signed login, client/date CRUD, statistics, catalog/photo upload/read/delete, XSS escaping, search, group connect/disconnect, scheduling/cancellation, expired session. MAX network calls use fixtures.');
+  console.log('PASS: separate frontend origin + real HTTP API + CORS: outside MAX, signed login, client/date CRUD, statistics, catalog/photo upload/read/delete, XSS escaping, search, group connect/disconnect, scheduling/cancellation, expired session. MAX network calls use fixtures.');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(()=>child.kill());

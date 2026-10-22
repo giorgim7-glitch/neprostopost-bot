@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO)
 app=Flask(__name__)
 app.config['MAX_CONTENT_LENGTH']=20*1024*1024
 # Authorization uses custom header, no cross-origin cookie credentials.
-CORS(app,resources={r'/api/*':{'origins':os.getenv('FRONTEND_ORIGIN','*').split(','),'allow_headers':['Authorization','Content-Type']}})
+CORS(app,resources={r'/api/*':{'origins':[origin.strip().rstrip('/') for origin in os.getenv('FRONTEND_ORIGIN','*').split(',') if origin.strip()],'allow_headers':['Authorization','Content-Type']}})
 
 def db():
     c=sqlite3.connect(str(DB),timeout=30)
