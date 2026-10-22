@@ -171,7 +171,7 @@ class BillingTests(unittest.TestCase):
     def test_renewal_uses_saved_method_only_with_consent_and_stops_after_cancel(self):
         with self.set_config():
             oid=self.order(True);billing.apply_payment(oid,self.payment(oid))
-            with app.db() as db: db.execute("UPDATE app_subscriptions SET next_charge_at=? WHERE owner_id='123'",(app.iso(app.utcnow()-timedelta(seconds=1)),));db.commit()
+            with app.db() as db: db.execute("UPDATE app_subscriptions SET next_charge_at=? WHERE owner_id='123'",(app.iso(app.utcnow()-timedelta(seconds=1)),));db.execute("UPDATE app_users SET paid_until=? WHERE id='123'",(app.iso(app.utcnow()-timedelta(seconds=1)),));db.commit()
             def renewed(method,path,payload=None,key=None):
                 self.assertEqual(payload['payment_method_id'],'saved-method');self.assertNotIn('confirmation',payload)
                 return self.payment(payload['metadata']['order_id'])
@@ -179,7 +179,7 @@ class BillingTests(unittest.TestCase):
                 billing.tick();self.assertEqual(remote.call_count,1)
                 billing.tick();self.assertEqual(remote.call_count,1)
             self.client.post('/api/billing/auto-renew',headers=self.auth,json={'enabled':False})
-            with app.db() as db: db.execute("UPDATE app_subscriptions SET next_charge_at=? WHERE owner_id='123'",(app.iso(app.utcnow()-timedelta(seconds=1)),));db.commit()
+            with app.db() as db: db.execute("UPDATE app_subscriptions SET next_charge_at=? WHERE owner_id='123'",(app.iso(app.utcnow()-timedelta(seconds=1)),));db.execute("UPDATE app_users SET paid_until=? WHERE id='123'",(app.iso(app.utcnow()-timedelta(seconds=1)),));db.commit()
             with patch.object(billing,'provider') as remote: billing.tick();remote.assert_not_called()
 
     def test_provider_request_has_auth_idempotency_and_preserves_tls(self):
@@ -203,7 +203,7 @@ class BillingTests(unittest.TestCase):
             def declined(method,path,payload=None,key=None):return self.payment(payload['metadata']['order_id'],'canceled')
             with patch.object(billing,'provider',side_effect=declined):
                 for _ in range(3):
-                    with app.db() as db:db.execute("UPDATE app_subscriptions SET next_charge_at=? WHERE owner_id='123'",(app.iso(app.utcnow()-timedelta(seconds=1)),));db.commit()
+                    with app.db() as db:db.execute("UPDATE app_subscriptions SET next_charge_at=? WHERE owner_id='123'",(app.iso(app.utcnow()-timedelta(seconds=1)),));db.execute("UPDATE app_users SET paid_until=? WHERE id='123'",(app.iso(app.utcnow()-timedelta(seconds=1)),));db.commit()
                     billing.tick()
             state=billing.public_state('123');self.assertFalse(state['auto_renew']);self.assertIn('отменила',state['error'])
             with app.db() as db:self.assertEqual(db.execute("SELECT failures FROM app_subscriptions WHERE owner_id='123'").fetchone()[0],3)
@@ -225,6 +225,19 @@ class BillingTests(unittest.TestCase):
             with patch.object(billing,'provider') as remote:
                 response=self.client.post('/api/billing/webhook',json={'event':'payment.succeeded','object':{'id':str(uuid.uuid4())}})
                 self.assertEqual(response.status_code,200);remote.assert_not_called()
+
+    def test_renewal_never_charges_before_paid_period_ends(self):
+        with self.set_config():
+            oid=self.order(True);billing.apply_payment(oid,self.payment(oid))
+            with app.db() as db:
+                db.execute("UPDATE app_subscriptions SET next_charge_at=? WHERE owner_id='123'",(app.iso(app.utcnow()-timedelta(days=1)),));db.commit()
+            with patch.object(billing,'provider') as remote:billing.tick();remote.assert_not_called()
+            self.client.post('/api/billing/auto-renew',headers=self.auth,json={'enabled':False})
+            self.client.post('/api/billing/auto-renew',headers=self.auth,json={'enabled':True})
+            with app.db() as db:
+                until=db.execute("SELECT paid_until FROM app_users WHERE id='123'").fetchone()[0]
+                due=db.execute("SELECT next_charge_at FROM app_subscriptions WHERE owner_id='123'").fetchone()[0]
+                self.assertEqual(until,due)
 
     def test_month_end_calendar_extension(self):
         self.assertEqual(billing.next_month(datetime(2027,1,31,tzinfo=timezone.utc)).day,28)

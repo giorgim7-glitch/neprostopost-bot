@@ -164,6 +164,7 @@ def apply_payment(order_id,data):
             db.execute('UPDATE app_users SET paid_until=?,paid_is_test=? WHERE id=?',(until,int(test),order['owner_id']))
             db.execute('UPDATE app_payments SET applied=1 WHERE id=?',(order_id,))
             sub=subscription(db,order['owner_id'])
+            db.execute('UPDATE app_subscriptions SET next_charge_at=? WHERE owner_id=?',(until,order['owner_id']))
             payment_method=data.get('payment_method') or {}
             if sub['revision']==order['revision']:
                 if order['kind']=='initial':
@@ -223,8 +224,8 @@ def tick():
         db.execute('BEGIN IMMEDIATE')
         sub=db.execute('''SELECT * FROM app_subscriptions s WHERE auto_renew=1 AND payment_method_id IS NOT NULL AND next_charge_at<=? AND payment_method_test=?
             AND NOT EXISTS(SELECT 1 FROM app_payments p WHERE p.owner_id=s.owner_id AND p.status IN ('creating','pending','waiting_for_capture','unknown'))
-            AND EXISTS(SELECT 1 FROM app_users u WHERE u.id=s.owner_id AND u.paid_is_test=?)
-            ORDER BY next_charge_at LIMIT 1''',(b.iso(b.utcnow()),int(os.getenv('YOOKASSA_TEST_MODE')=='1'),int(os.getenv('YOOKASSA_TEST_MODE')=='1'))).fetchone()
+            AND EXISTS(SELECT 1 FROM app_users u WHERE u.id=s.owner_id AND u.paid_is_test=? AND u.paid_until<=?)
+            ORDER BY next_charge_at LIMIT 1''',(b.iso(b.utcnow()),int(os.getenv('YOOKASSA_TEST_MODE')=='1'),int(os.getenv('YOOKASSA_TEST_MODE')=='1'),b.iso(b.utcnow()))).fetchone()
         if not sub: return
         order_id=create_order(db,sub['owner_id'],None,True,sub['email'] or '',renewal=True)
         db.commit()
@@ -289,6 +290,9 @@ def init(backend):
             db.execute('BEGIN IMMEDIATE');sub=subscription(db,g.user_id)
             if data['enabled'] and (not sub['payment_method_id'] or sub['payment_method_test']!=int(os.getenv('YOOKASSA_TEST_MODE')=='1') or not b.has_pro(db,g.user_id)):
                 return jsonify(message='Для автопродления сначала оплатите подписку с сохранением способа оплаты.'),400
+            if data['enabled']:
+                until=db.execute('SELECT paid_until FROM app_users WHERE id=?',(g.user_id,)).fetchone()['paid_until']
+                db.execute('UPDATE app_subscriptions SET next_charge_at=? WHERE owner_id=?',(until,g.user_id))
             consent_event(db,g.user_id,'auto_enabled' if data['enabled'] else 'auto_disabled')
             db.execute('''UPDATE app_subscriptions SET auto_renew=?,revision=revision+1,consent_at=?,consent_version=?,last_error=NULL WHERE owner_id=?''',
                        (int(data['enabled']),b.iso(b.utcnow()) if data['enabled'] else sub['consent_at'],CONSENT_VERSION,g.user_id));db.commit()
