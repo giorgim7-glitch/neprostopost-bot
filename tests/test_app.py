@@ -179,7 +179,7 @@ class AppTests(unittest.TestCase):
         with patch.object(app,'max_api',side_effect=app.requests.Timeout):
             self.assertFalse(max_events.poll_updates())
         self.assertEqual(max_events.state('updates_marker'),'101')
-        self.assertIn('не дождался',max_events.state('updates_error'))
+        self.assertIn('TIMEOUT',max_events.state('updates_error'))
 
     def test_max_events_removal_cancels_pending_jobs(self):
         jid=self.add_job()
@@ -204,6 +204,23 @@ class AppTests(unittest.TestCase):
              patch.object(worker.time,'sleep',side_effect=KeyboardInterrupt):
             with self.assertRaises(KeyboardInterrupt): worker.run()
             poll.assert_called_once()
+
+    def test_connection_diagnostics_classify_errors_without_exposing_secrets(self):
+        import socket
+        from urllib3.exceptions import NameResolutionError,MaxRetryError
+        dns=NameResolutionError('platform-api2.max.ru',None,socket.gaierror(-2,'missing'))
+        error=app.requests.ConnectionError(MaxRetryError(None,'/updates',dns))
+        self.assertIn('DNS:',max_events.connection_reason(error))
+        for error,prefix in [(app.requests.exceptions.SSLError('PRIVATE_TOKEN_MUST_NOT_BE_SHOWN'),'TLS:'),
+                             (app.requests.exceptions.ProxyError('https://user:PRIVATE_PASSWORD@proxy'),'PROXY:'),
+                             (app.requests.ConnectionError('PRIVATE_TOKEN_MUST_NOT_BE_SHOWN'),'CONNECT:')]:
+            message=max_events.connection_reason(error)
+            self.assertTrue(message.startswith(prefix))
+            self.assertNotIn('PRIVATE',message)
+        with patch.object(app,'max_api',side_effect=app.requests.exceptions.SSLError('PRIVATE_TOKEN')):
+            self.assertFalse(max_events.poll_updates())
+        self.assertIn('TLS:',max_events.state('updates_error'))
+        self.assertNotIn('PRIVATE_TOKEN',max_events.state('updates_error'))
 
     def test_upload_image_contract(self):
         name='a'*32+'.png'; (app.UPLOAD/name).write_bytes(b'fixture')

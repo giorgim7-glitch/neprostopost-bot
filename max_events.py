@@ -1,7 +1,11 @@
 """Remember groups observed in supported MAX events; never persist message text."""
 import re
+import logging
+from urllib.parse import urlsplit
 import requests
 import app as backend
+
+LOG = logging.getLogger('neprostopost.events')
 
 
 def state(key, default=None):
@@ -11,9 +15,34 @@ def state(key, default=None):
 
 
 def set_error(message):
+    previous=state('updates_error')
     with backend.db() as db:
         db.execute('INSERT OR REPLACE INTO app_bot_state VALUES(?,?)', ('updates_error', message))
         db.commit()
+    if message != previous:
+        LOG.warning('%s',message)
+
+
+def connection_reason(error):
+    # Inspect exception types only. Error strings can contain proxy credentials or URLs.
+    pending=[error]
+    seen=set()
+    names=set()
+    while pending:
+        current=pending.pop()
+        if not isinstance(current,BaseException) or id(current) in seen: continue
+        seen.add(id(current)); names.add(type(current).__name__)
+        pending.extend([current.__cause__,current.__context__,getattr(current,'reason',None)])
+        pending.extend(arg for arg in current.args if isinstance(arg,BaseException))
+    if names & {'SSLError','SSLCertVerificationError','CertificateError'}:
+        return 'TLS: не удалось проверить сертификат MAX. Проверка сертификатов остаётся включённой.'
+    if 'ProxyError' in names:
+        return 'PROXY: ошибка подключения через прокси Ботхоста.'
+    if names & {'NameResolutionError','gaierror'}:
+        return 'DNS: Ботхост не смог определить IP-адрес сервера MAX.'
+    if names & {'ConnectionRefusedError'}:
+        return 'TCP: сервер MAX или сеть отклонили соединение.'
+    return 'CONNECT: соединение с сервером MAX оборвалось или недоступно.'
 
 
 def remember(db, event):
@@ -75,9 +104,9 @@ def poll_updates():
             db.commit()
         return True
     except requests.Timeout:
-        set_error('Ботхост не дождался ответа MAX при получении событий.')
-    except requests.ConnectionError:
-        set_error('Ботхост не смог подключиться к MAX для получения событий.')
+        set_error('TIMEOUT: Ботхост не дождался ответа '+urlsplit(backend.BASE).hostname+'.')
+    except requests.ConnectionError as error:
+        set_error(connection_reason(error)+' Адрес: '+urlsplit(backend.BASE).hostname+'.')
     except (requests.RequestException, ValueError, KeyError, TypeError, RuntimeError):
         set_error('Не удалось обработать ответ MAX с событиями бота.')
     return False

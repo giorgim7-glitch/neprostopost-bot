@@ -10,7 +10,9 @@ from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
 TOKEN=os.getenv('MAX_BOT_TOKEN','').strip()
-BASE='https://platform-api2.max.ru'
+BASE=os.getenv('MAX_API_BASE_URL','https://platform-api2.max.ru').strip().rstrip('/')
+if BASE not in ('https://platform-api2.max.ru','https://platform-api.max.ru'):
+    raise RuntimeError('MAX_API_BASE_URL должен быть официальным HTTPS-адресом MAX API')
 DATA=Path(os.getenv('DATA_DIR',str(Path(__file__).resolve().parent / '.data')))
 DATA.mkdir(parents=True,exist_ok=True)
 DB=Path(os.getenv('DB_PATH',str(DATA/'data.db')))
