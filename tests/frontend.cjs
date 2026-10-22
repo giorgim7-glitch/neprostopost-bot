@@ -73,7 +73,10 @@ function createDOM(html,url,webapp,apiOrigin) {
   $('catalogSearch').value='нет такого объекта'; w.renderCatalog();
   assert.match($('catalogList').textContent,/не найдено/);
   $('catalogSearch').value=''; w.renderCatalog();
-  $('groupId').value='-123'; await w.connectChat(); assert.match($('groupsList').textContent,/Тестовая группа/);
+  await w.findGroups(); assert.match($('availableGroups').textContent,/Тестовая группа/);
+  $('availableGroups').querySelector('button[data-connect]').click();
+  await waitFor(()=>$('groupsList').textContent.includes('Тестовая группа'));
+  await waitFor(()=>$('appNotice').textContent.includes('Группа подключена'));
   $('adText').value='Тестовая рассылка'; await w.sendBroadcast();
   assert.match($('broadcastJobs').textContent,/Тестовая рассылка/);
   assert.match($('broadcastJobs').textContent,/Запланировано/);

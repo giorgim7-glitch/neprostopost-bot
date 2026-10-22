@@ -5,6 +5,8 @@ let sessionToken = sessionStorage.getItem('neprostopost.session') || '';
 let authenticated = false;
 let catalogItems = [];
 let imageObjects = [];
+let discoveryAttempted = false;
+let discoveryMarker = null;
 const $ = id => document.getElementById(id);
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const dateLabel = value => new Date(value).toLocaleString('ru-RU', {dateStyle:'short',timeStyle:'short'});
@@ -48,6 +50,7 @@ function switchTab(tabName, element) {
     if (!authenticated) return;
     const loads = {broadcast:loadChats, catalog:loadCatalogList, dashboard:loadDashboard, clients:loadClients, profile:loadProfile};
     loads[tabName]?.().catch(error => notice(error.message, true));
+    if (tabName === 'broadcast' && !discoveryAttempted) { discoveryAttempted = true; findGroups(); }
 }
 const statuses = {scheduled:'Запланировано', processing:'Отправляется', sent:'Отправлено', failed:'Ошибка отправки', uncertain:'Проверьте доставку в MAX', cancelled:'Отменено'};
 function taskMarkup(job) {
@@ -67,16 +70,31 @@ async function loadDashboard() {
 async function loadChats() {
     const [data, tasks] = await Promise.all([api('/get_chats'), api('/get_jobs')]);
     $('chatSelect').replaceChildren(...data.chats.map(chat => new Option(chat.title, chat.id)));
-    $('groupsList').innerHTML = data.chats.map(chat => `<div class="group-card"><div class="group-info"><div class="group-name">${escapeHTML(chat.title)}</div><div class="group-members">ID: ${escapeHTML(chat.id)}</div></div><button data-disconnect="${escapeHTML(chat.id)}">Отключить</button></div>`).join('') || '<p>Подключите группу по её ID.</p>';
+    $('groupsList').innerHTML = data.chats.map(chat => `<div class="group-card"><div class="group-info"><div class="group-name">${escapeHTML(chat.title)}</div><div class="group-members">ID: ${escapeHTML(chat.id)}</div></div><button data-disconnect="${escapeHTML(chat.id)}">Отключить</button></div>`).join('') || '<p>Подключённых групп пока нет. Найдите группу в MAX и нажмите «Подключить».</p>';
     $('broadcastJobs').innerHTML = tasks.jobs.filter(j => j.type === 'group').map(taskMarkup).join('') || '<p>Рассылок пока нет</p>';
 }
-async function connectChat() {
+async function findGroups(nextPage = false) {
     await action(async () => {
-        const chatId = $('groupId').value.trim();
+        discoveryAttempted = true;
+        const suffix = nextPage && discoveryMarker != null ? '?marker=' + encodeURIComponent(discoveryMarker) : '';
+        const data = await api('/discover_chats' + suffix);
+        discoveryMarker = data.marker;
+        const cards = data.chats.map(chat => `<div class="group-card"><div class="group-info"><div class="group-name">${escapeHTML(chat.title)}</div></div>${chat.connected ? '<span>Подключена</span>' : `<button data-connect="${escapeHTML(chat.id)}">Подключить</button>`}</div>`).join('');
+        $('availableGroups').innerHTML = cards || '<p>На этой странице подходящих групп нет. Ваш аккаунт и бот должны быть администраторами группы.</p>';
+        if (data.unavailable_count) $('availableGroups').insertAdjacentHTML('beforeend', '<p>MAX не подтвердил права в части групп. Попробуйте поиск ещё раз.</p>');
+        if (discoveryMarker != null) {
+            const more = document.createElement('button'); more.textContent = 'Следующие группы';
+            more.addEventListener('click', () => findGroups(true)); $('availableGroups').append(more);
+        }
+    });
+}
+async function connectChat(selectedId) {
+    await action(async () => {
+        const chatId = selectedId || $('groupId').value.trim();
         if (!/^-?\d+$/.test(chatId)) throw new Error('Введите числовой ID группы');
         await api('/connect_chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({chat_id:chatId})});
         $('groupId').value = '';
-        await loadChats(); notice('Группа подключена.');
+        await loadChats(); $('availableGroups').replaceChildren(); notice('Группа подключена.');
     });
 }
 async function loadClients() {
@@ -163,6 +181,7 @@ async function logout() {
 document.addEventListener('click', event => {
     const button = event.target.closest('button');
     if (!button) return;
+    if (button.dataset.connect) connectChat(button.dataset.connect);
     if (button.dataset.deleteJob) action(async () => {
         await api(`/delete_job/${encodeURIComponent(button.dataset.deleteJob)}/${button.dataset.jobType}`, {method:'DELETE'});
         await Promise.all([loadDashboard(),loadClients(),loadChats()]); notice('Задача удалена.');

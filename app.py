@@ -2,6 +2,7 @@ import os, json, uuid, hmac, hashlib, sqlite3, logging, re
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from functools import wraps
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import parse_qsl
 import requests
 from flask import Flask, request, jsonify, g, send_from_directory
@@ -88,12 +89,12 @@ def require_auth(fn):
 
 def max_api(method,path,**kw):
     if not TOKEN: raise RuntimeError('MAX_BOT_TOKEN не задан')
-    return requests.request(method,BASE+path,headers={'Authorization':TOKEN},timeout=25,**kw)
+    return requests.request(method,BASE+path,headers={'Authorization':TOKEN},timeout=kw.pop('timeout',25),**kw)
 
-def get_admin_group(chat_id,user_id):
+def get_admin_group(chat_id,user_id,timeout=25):
     if not re.fullmatch(r'-?\d+',str(chat_id)): return None
     try:
-        response=max_api('GET',f'/chats/{chat_id}/members/admins')
+        response=max_api('GET',f'/chats/{chat_id}/members/admins',timeout=timeout)
         response.raise_for_status()
         data=response.json()
         for admin in data.get('members',[]):
@@ -169,6 +170,37 @@ def me():
 def chats():
     with db() as c: rows=c.execute('SELECT chat_id,title FROM app_groups WHERE owner_id=? ORDER BY title',(g.user_id,)).fetchall()
     return jsonify(chats=[{'id':r['chat_id'],'title':r['title'],'members_count':None} for r in rows])
+
+@app.get('/api/discover_chats')
+@require_auth
+def discover_chats():
+    if not TOKEN: return jsonify(message='MAX_BOT_TOKEN не задан'),503
+    params={'count':5}
+    marker=request.args.get('marker')
+    if marker is not None:
+        if not re.fullmatch(r'\d{1,30}',marker): return jsonify(message='Некорректная страница списка'),400
+        params['marker']=marker
+    try:
+        response=max_api('GET','/chats',params=params,timeout=8)
+        response.raise_for_status()
+        payload=response.json()
+        candidates=payload['chats']
+        if not isinstance(candidates,list): raise ValueError('Invalid MAX chat list')
+    except (requests.RequestException,ValueError,KeyError,TypeError,RuntimeError):
+        return jsonify(message='Не удалось получить список групп от MAX. Попробуйте ещё раз.'),502
+    candidates=[chat for chat in candidates if isinstance(chat,dict)
+        and chat.get('type') != 'dialog' and chat.get('status') not in ('removed','left','closed')
+        and re.fullmatch(r'-?\d+',str(chat.get('chat_id','')))]
+    user_id=g.user_id
+    # Small pages and bounded parallel requests fit the web request timeout.
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        permissions=list(pool.map(lambda chat: get_admin_group(chat['chat_id'],user_id,timeout=8),candidates))
+    with db() as c:
+        connected={r['chat_id'] for r in c.execute('SELECT chat_id FROM app_groups WHERE owner_id=?',(user_id,))}
+    chats=[{'id':str(chat['chat_id']),'title':chat.get('title') or 'Группа '+str(chat['chat_id']),
+            'connected':str(chat['chat_id']) in connected}
+           for chat,allowed in zip(candidates,permissions) if allowed is True]
+    return jsonify(chats=chats,marker=payload.get('marker'),unavailable_count=permissions.count(None))
 
 @app.post('/api/connect_chat')
 @require_auth

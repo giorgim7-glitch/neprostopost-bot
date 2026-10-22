@@ -139,6 +139,29 @@ class AppTests(unittest.TestCase):
         self.assertEqual(self.client.delete('/api/groups/-123',headers=self.auth).status_code,200)
         self.assertEqual(self.status(jid)['status'],'cancelled')
 
+    def test_group_discovery_only_lists_groups_administered_by_current_user(self):
+        payload={'chats':[
+            {'chat_id':-1,'title':'Моя группа','type':'chat'},
+            {'chat_id':-2,'title':'Чужая группа','type':'chat'},
+            {'chat_id':-3,'title':'Личный чат','type':'dialog'},
+            {'chat_id':-4,'title':'Недоступная группа','type':'chat'},
+        ],'marker':12345}
+        response=Mock(json=lambda:payload)
+        def permission(chat_id,user_id,timeout=25):
+            self.assertEqual(user_id,'123')
+            return {-1:True,-2:False,-4:None}[chat_id]
+        self.assertEqual(self.client.get('/api/discover_chats').status_code,401)
+        with patch.object(app,'max_api',return_value=response) as call, patch.object(app,'get_admin_group',side_effect=permission):
+            result=self.client.get('/api/discover_chats?marker=100',headers=self.auth)
+            self.assertEqual(result.status_code,200)
+            self.assertEqual(result.json['chats'],[{'id':'-1','title':'Моя группа','connected':False}])
+            self.assertEqual(result.json['marker'],12345)
+            self.assertEqual(result.json['unavailable_count'],1)
+            self.assertEqual(call.call_args.kwargs['params'],{'count':5,'marker':'100'})
+        self.assertEqual(self.client.get('/api/discover_chats?marker=invalid',headers=self.auth).status_code,400)
+        with patch.object(app,'max_api',side_effect=app.requests.Timeout):
+            self.assertEqual(self.client.get('/api/discover_chats',headers=self.auth).status_code,502)
+
     def test_upload_image_contract(self):
         name='a'*32+'.png'; (app.UPLOAD/name).write_bytes(b'fixture')
         with patch.object(app,'max_api',return_value=Mock(json=lambda:{'url':'https://upload.max.ru/test'})),patch.object(worker.requests,'post',return_value=Mock(json=lambda:{'photos':{'1':{'token':'photo-token'}}})) as upload:
