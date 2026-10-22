@@ -5,17 +5,22 @@ import logging
 import mimetypes
 import time
 from datetime import timedelta
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit
 
 import requests
 import app as backend
 import max_events
+import reminders
+import billing
 
 LOG = logging.getLogger('neprostopost.worker')
 
 
 def finish(job_id, status, error=None, message_id=None):
     with backend.db() as db:
+        if status in ('failed','cancelled'):
+            db.execute('DELETE FROM app_broadcast_usage WHERE job_id=?',(job_id,))
         db.execute('UPDATE app_jobs SET status=?,last_error=?,message_id=? WHERE id=?',
                    (status, error, message_id, job_id))
         db.commit()
@@ -70,6 +75,13 @@ def deliver(job):
     if not connected:
         finish(job['id'], 'cancelled', 'Группа отключена')
         return
+    with backend.db() as db:
+        db.execute('BEGIN IMMEDIATE')
+        limit=backend.reserve_broadcast(db,job['owner_id'],job['id'],backend.utcnow(),job['chat_id'])
+        db.commit()
+    if limit:
+        finish(job['id'],'failed',limit)
+        return
     permission = backend.get_admin_group(job['chat_id'], job['owner_id'])
     if permission is None:
         retry(job, 'MAX временно не подтвердил права администратора')
@@ -119,23 +131,34 @@ def run():
             raise SystemExit('Worker для этой базы данных уже запущен')
         with backend.db() as db:
             db.execute("UPDATE app_jobs SET status='uncertain',last_error='Worker прервался. Проверьте доставку в MAX.' WHERE status='processing'")
+            db.execute("UPDATE app_clients SET reminder_status='uncertain',reminder_error='Worker прервался. Проверьте личный чат с ботом.' WHERE reminder_status='processing'")
             db.commit()
         LOG.info('Worker started')
-        next_poll=0
-        while True:
-            if time.monotonic() >= next_poll:
-                max_events.poll_updates()
-                next_poll=time.monotonic()+5
-            job = claim()
-            if not job:
-                time.sleep(2)
-                continue
-            try:
-                deliver(job)
-            except Exception:
-                # Do not log response bodies, upload URLs or credentials.
-                LOG.error('Unexpected delivery failure for job %s', job['id'])
-                finish(job['id'], 'uncertain', 'Ошибка worker. Проверьте доставку перед повторной отправкой.')
+        with ThreadPoolExecutor(max_workers=1) as billing_pool:
+            next_poll=0
+            next_billing=0
+            billing_future=None
+            while True:
+                if time.monotonic() >= next_poll:
+                    max_events.poll_updates()
+                    next_poll=time.monotonic()+5
+                if time.monotonic() >= next_billing and (billing_future is None or billing_future.done()):
+                    if billing_future is not None:
+                        try: billing_future.result()
+                        except Exception: LOG.error('Billing task failed; check payment state')
+                    billing_future=billing_pool.submit(billing.tick)
+                    next_billing=time.monotonic()+60
+                reminders.process_one()
+                job = claim()
+                if not job:
+                    time.sleep(2)
+                    continue
+                try:
+                    deliver(job)
+                except Exception:
+                    # Do not log response bodies, upload URLs or credentials.
+                    LOG.error('Unexpected delivery failure for job %s', job['id'])
+                    finish(job['id'], 'uncertain', 'Ошибка worker. Проверьте доставку перед повторной отправкой.')
 
 
 if __name__ == '__main__':

@@ -31,13 +31,15 @@ class AppTests(unittest.TestCase):
     def setUp(self):
         self.client = app.app.test_client()
         with app.db() as db:
-            for table in ('app_jobs','app_groups','app_clients','app_catalog','app_sessions','app_users','app_known_chats','app_bot_state'):
+            for table in ('app_jobs','app_groups','app_clients','app_catalog','app_sessions','app_users','app_known_chats','app_bot_state','app_broadcast_usage','app_payments','app_subscriptions','app_consent_events'):
                 db.execute(f'DELETE FROM {table}')
             db.commit()
         response = self.client.post('/api/auth/max',json={'init_data':signed()})
         self.assertEqual(response.status_code,200)
         self.auth = {'Authorization':'Bearer '+response.json['token']}
         self.future = app.iso(app.utcnow()+timedelta(hours=1))
+        with app.db() as db:
+            db.execute('UPDATE app_users SET paid_until=? WHERE id=?',(app.iso(app.utcnow()+timedelta(days=30)),'123'));db.commit()
 
     def test_frontend_and_access_control(self):
         response = self.client.get('/')

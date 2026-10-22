@@ -7,6 +7,8 @@ let catalogItems = [];
 let imageObjects = [];
 let discoveryAttempted = false;
 let discoveryMarker = null;
+let billingState = null;
+let adCatalogItems = [];
 const $ = id => document.getElementById(id);
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const dateLabel = value => new Date(value).toLocaleString('ru-RU', {dateStyle:'short',timeStyle:'short'});
@@ -21,6 +23,10 @@ async function api(path, options = {}) {
     const response = await fetch(API_ORIGIN + '/api' + path, {...options, headers});
     const data = await response.json().catch(() => ({message:'Некорректный ответ сервера'}));
     if (!response.ok) {
+        if (response.status === 402) {
+            switchTab('profile', document.querySelectorAll('.tab-item')[4]);
+            notice(data.message || 'Для этой функции нужна подписка PRO.', true);
+        }
         if (response.status === 401) {
             authenticated = false;
             sessionToken = '';
@@ -68,7 +74,11 @@ async function loadDashboard() {
     $('dashboardTasks').innerHTML = pending.slice(0, 5).map(taskMarkup).join('') || '<p>Нет активных задач</p>';
 }
 async function loadChats() {
-    const [data, tasks] = await Promise.all([api('/get_chats'), api('/get_jobs')]);
+    const [data, tasks, catalog] = await Promise.all([api('/get_chats'), api('/get_jobs'), api('/get_catalog')]);
+    adCatalogItems = catalog.catalog;
+    const selected = $('adCatalog').value;
+    $('adCatalog').replaceChildren(new Option('Написать с нуля', ''), ...adCatalogItems.map(item => new Option(item.title, item.id)));
+    if (adCatalogItems.some(item => item.id === selected)) $('adCatalog').value = selected;
     $('chatSelect').replaceChildren(...data.chats.map(chat => new Option(chat.title, chat.id)));
     $('groupsList').innerHTML = data.chats.map(chat => `<div class="group-card"><div class="group-info"><div class="group-name">${escapeHTML(chat.title)}</div><div class="group-members">ID: ${escapeHTML(chat.id)}</div></div><button data-disconnect="${escapeHTML(chat.id)}">Отключить</button></div>`).join('') || '<p>Подключённых групп пока нет. Найдите группу в MAX и нажмите «Подключить».</p>';
     $('broadcastJobs').innerHTML = tasks.jobs.filter(j => j.type === 'group').map(taskMarkup).join('') || '<p>Рассылок пока нет</p>';
@@ -100,7 +110,7 @@ async function connectChat(selectedId) {
 }
 async function loadClients() {
     const data = await api('/get_clients');
-    $('clientsList').innerHTML = data.clients.map(c => `<div class="task-card"><div class="task-content"><div class="task-title">${escapeHTML(c.type)}: ${escapeHTML(c.name)}</div><div class="task-sub">${escapeHTML(c.text)}</div><div>${escapeHTML(dateLabel(c.schedule_time))}</div><div class="task-phone">${escapeHTML(c.phone)}</div></div><button data-delete-job="${escapeHTML(c.id)}" data-job-type="client">Удалить</button></div>`).join('') || '<p>Пока нет запланированных касаний</p>';
+    $('clientsList').innerHTML = data.clients.map(c => `<div class="task-card"><div class="task-content"><div class="task-title">${escapeHTML(c.type)}: ${escapeHTML(c.name)}</div><div class="task-sub">${escapeHTML(c.text)}</div><div>${escapeHTML(dateLabel(c.schedule_time))}</div><div class="task-phone">${escapeHTML(c.phone)}</div><div>Напоминание: ${escapeHTML({scheduled:'Запланировано',processing:'Отправляется',sent:'Отправлено вам в MAX',failed:'Не отправлено',uncertain:'Проверьте чат с ботом',paused:'Нужна подписка PRO',disabled:'Не настроено'}[c.reminder_status] || c.reminder_status)}</div>${c.reminder_error ? `<div>${escapeHTML(c.reminder_error)}</div>` : ''}${c.prepared_message ? `<p class="prepared-message">${escapeHTML(c.prepared_message)}</p><button data-copy-client="${escapeHTML(c.id)}">Скопировать сообщение</button>` : ''}</div><button data-delete-job="${escapeHTML(c.id)}" data-job-type="client">Удалить</button></div>`).join('') || '<p>Пока нет запланированных касаний</p>';
 }
 function renderCatalog() {
     imageObjects.forEach(URL.revokeObjectURL); imageObjects = [];
@@ -126,12 +136,65 @@ function renderCatalog() {
 }
 async function loadCatalogList() { catalogItems = (await api('/get_catalog')).catalog; renderCatalog(); }
 async function loadProfile() {
-    const [stats, profile] = await Promise.all([api('/get_stats'), api('/me')]);
+    const [stats, profile, plan] = await Promise.all([api('/get_stats'), api('/me'), api('/billing')]);
+    billingState = plan;
     $('profGroups').textContent = stats.groups; $('profClients').textContent = stats.clients;
     $('profSubs').textContent = stats.subscribers ?? '—';
     $('profName').textContent = profile.user.first_name || 'Пользователь MAX';
     $('userAvatar').textContent = (profile.user.first_name || 'М')[0];
-    $('subscriptionLabel').textContent = profile.subscription === 'trial' ? `Пробный период до ${dateLabel(profile.trial_end)}` : 'Пробный период завершён';
+    $('subscriptionLabel').textContent = profile.subscription === 'pro' ? `PRO до ${dateLabel(profile.paid_until)}` : 'Бесплатный тариф';
+    renderBilling();
+}
+function renderBilling() {
+    if (!billingState) return;
+    const state = billingState;
+    const messages = [state.subscription === 'pro' ? `Подписка активна до ${dateLabel(state.paid_until)}.` : 'Сейчас у вас бесплатный тариф.'];
+    if (state.auto_renew) messages.push(`Автопродление включено: 499 ₽ ${dateLabel(state.next_charge_at)}.`);
+    if (state.error) messages.push(state.error);
+    if (!state.configured) messages.push(state.configuration_error);
+    if (state.test_mode) messages.push('Тестовый режим оплаты.');
+    $('billingStatus').textContent = messages.join(' ');
+    $('billingEmail').required = state.receipt_email_required;
+    $('checkPayment').hidden = !state.pending_payment;
+    $('disableRenew').hidden = !state.auto_renew;
+    $('enableRenew').hidden = state.auto_renew || !state.saved_method || state.subscription !== 'pro';
+}
+async function buySubscription(method) {
+    await action(async () => {
+        const data = await api('/billing/checkout', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({method,email:$('billingEmail').value.trim(),auto_renew:$('renewConsent').checked})});
+        billingState=data; renderBilling();
+        const url=data.pending_payment?.confirmation_url;
+        if (url) {
+            if (window.WebApp?.openLink) window.WebApp.openLink(url);
+            else location.assign(url);
+        } else await loadProfile();
+    });
+}
+async function checkPayment() {
+    await action(async () => {
+        if (billingState?.pending_payment) {
+            billingState=await api('/billing/payments/'+encodeURIComponent(billingState.pending_payment.id),{method:'POST'});
+        }
+        await loadProfile();
+        notice(billingState.subscription === 'pro' ? 'Оплата подтверждена. Подписка PRO активна.' : 'Оплата пока не подтверждена. Проверьте позже.');
+    });
+}
+async function enableRenewal() {
+    await action(async () => {
+        if (!$('renewConsent').checked) throw new Error('Отметьте согласие на ежемесячное списание 499 ₽.');
+        billingState=await api('/billing/auto-renew',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:true})});
+        renderBilling(); notice('Автопродление включено: 499 ₽ в месяц.');
+    });
+}
+async function disableRenewal() {
+    await action(async () => {
+        billingState=await api('/billing/auto-renew',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:false})});
+        renderBilling(); notice('Автопродление отключено. Оплаченный период сохраняется. Уже обрабатываемый платёж может завершиться.');
+    });
+}
+function selectCatalogObject() {
+    const item=adCatalogItems.find(item => item.id === $('adCatalog').value);
+    if (item) $('adText').value=[item.title,item.address,item.price,item.description].filter(Boolean).join('\n');
 }
 function futureISO(value) {
     const date = new Date(value);
@@ -145,6 +208,7 @@ async function sendBroadcast() {
     await action(async () => {
         if (!$('chatSelect').value || !$('adText').value.trim()) throw new Error('Выберите группу и напишите текст');
         const form = new FormData(); form.append('chat_id', $('chatSelect').value); form.append('text', $('adText').value.trim());
+        if ($('adCatalog').value) form.append('catalog_id', $('adCatalog').value);
         form.append('run_at', futureISO($('adRunAt').value)); appendImages(form, $('adImages'));
         const result = await api('/submit_ad', {method:'POST', body:form});
         $('adText').value = ''; $('adImages').value = ''; $('broadcastForm').style.display = 'none';
@@ -156,9 +220,12 @@ async function addClient() {
         if (!$('clientName').value.trim() || !$('clientDate').value || !$('clientTime').value) throw new Error('Укажите имя, дату и время');
         const form = new FormData();
         for (const [field,id] of Object.entries({name:'clientName',phone:'clientPhone',text:'clientText',type:'clientType',date:'clientDate',time:'clientTime'})) form.append(field, $(id).value);
-        form.append('run_at', futureISO(`${$('clientDate').value}T${$('clientTime').value}`));
+        const runAt=futureISO(`${$('clientDate').value}T${$('clientTime').value}`);
+        form.append('run_at',runAt);
+        form.append('reminder_at',futureISO(new Date(new Date(runAt).getTime()-Number($('clientReminder').value)*60000).toISOString()));
+        form.append('prepared_message',$('clientPrepared').value);
         await api('/add_client', {method:'POST',body:form});
-        for (const id of ['clientName','clientPhone','clientText']) $(id).value = '';
+        for (const id of ['clientName','clientPhone','clientText','clientPrepared']) $(id).value = '';
         $('addClientForm').style.display = 'none'; await loadClients(); notice('Касание сохранено в планере.');
     });
 }
@@ -182,10 +249,16 @@ async function logout() {
 document.addEventListener('click', event => {
     const button = event.target.closest('button');
     if (!button) return;
+    if (button.dataset.copyClient) {
+        const text=button.closest('.task-content').querySelector('.prepared-message').textContent;
+        if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(() => notice('Сообщение скопировано.')).catch(() => notice('Скопируйте текст сообщения вручную.'));
+        else notice('Скопируйте текст сообщения вручную.');
+    }
     if (button.dataset.connect) connectChat(button.dataset.connect);
     if (button.dataset.deleteJob) action(async () => {
         await api(`/delete_job/${encodeURIComponent(button.dataset.deleteJob)}/${button.dataset.jobType}`, {method:'DELETE'});
-        await Promise.all([loadDashboard(),loadClients(),loadChats()]); notice('Задача удалена.');
+        await Promise.all([loadDashboard(),loadChats()]);
+        if (billingState?.subscription === 'pro') await loadClients(); notice('Задача удалена.');
     });
     if (button.dataset.deleteCatalog) action(async () => {
         await api(`/catalog/${encodeURIComponent(button.dataset.deleteCatalog)}`, {method:'DELETE'}); await loadCatalogList(); notice('Объект удалён.');
@@ -228,3 +301,5 @@ setInterval(() => {
     const refresh = {'screen-dashboard':loadDashboard,'screen-broadcast':loadChats};
     refresh[active]?.().catch(error => notice(error.message, true));
 }, 15000);
+
+document.addEventListener('visibilitychange', () => { if (!document.hidden && authenticated) loadProfile().catch(error => notice(error.message,true)); });

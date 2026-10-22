@@ -149,6 +149,7 @@
         <div id="broadcastForm" style="display:none; margin-top:20px; background:var(--card); padding:20px; border-radius:20px;">
             <h3>Новая рассылка</h3>
             <div class="form-group"><label>Группа</label><select id="chatSelect"></select></div>
+            <div class="form-group"><label for="adCatalog">Объект из каталога</label><select id="adCatalog" onchange="selectCatalogObject()"><option value="">Написать с нуля</option></select><p>Текст можно отредактировать. Фотографии объекта добавятся к рассылке.</p></div>
             <div class="form-group"><label>Текст</label><textarea id="adText" style="height:100px;"></textarea></div>
             <div class="form-group"><label>Фото</label><input type="file" id="adImages" accept="image/jpeg,image/png,image/webp,image/gif" multiple></div>
             <div class="form-group"><label>Дата и время отправки</label><input type="datetime-local" id="adRunAt" required></div><button class="btn-main" onclick="sendBroadcast()">Запланировать</button>
@@ -171,7 +172,7 @@
             <div class="form-group"><label>Номер телефона</label><input type="tel" id="clientPhone" placeholder="+7 900 000-00-00"></div>
             <div class="form-group"><label>Действие</label><select id="clientType"><option>Звонок</option><option>Встреча</option><option>Сообщение</option></select></div>
             <div class="form-group"><label>Детали</label><input type="text" id="clientText" placeholder="ЖК Иначе"></div>
-            <div class="form-group"><label>Дата и время</label><input type="date" id="clientDate"><input type="time" id="clientTime" style="margin-top:10px;"></div>
+            <div class="form-group"><label>Подготовленное сообщение клиенту</label><textarea id="clientPrepared" maxlength="2000" placeholder="Текст, который вы сможете скопировать и отправить клиенту"></textarea></div><div class="form-group"><label>Напомнить в личном чате с ботом</label><select id="clientReminder"><option value="0">В момент контакта</option><option value="5">За 5 минут</option><option value="15">За 15 минут</option><option value="60">За час</option></select></div><p>Сначала откройте личный чат с ботом MAX и нажмите «Начать». Сообщение клиенту вы отправляете сами.</p><div class="form-group"><label>Дата и время</label><input type="date" id="clientDate"><input type="time" id="clientTime" style="margin-top:10px;"></div>
             <button class="btn-main" onclick="addClient()">Сохранить</button>
         </div>
     </div>
@@ -203,6 +204,20 @@
             <div class="profile-role">Риелтор</div>
             <div class="pro-badge" id="subscriptionLabel">—</div>
         </div>
+        <div id="subscriptionPanel" style="background:white;padding:20px;border-radius:20px;margin-bottom:20px;">
+            <h3>Непростопост PRO</h3><div><s style="color:var(--muted);">999 ₽</s> <strong style="font-size:30px;">499 ₽</strong> / месяц</div>
+            <p>Больше одной группы и одного сообщения в день, планер с напоминаниями и больше одного объекта в каталоге.</p>
+            <p>Бесплатно: 1 группа, 1 сообщение в день по московскому времени, 1 объект. Объявление можно собрать из каталога.</p>
+            <div id="billingStatus" role="status"></div>
+            <div class="form-group"><label for="billingEmail">Email для чека</label><input id="billingEmail" type="email" autocomplete="email" placeholder="you@example.ru"></div>
+            <label style="display:block;margin:15px 0;"><input id="renewConsent" type="checkbox"> Согласен на автопродление: списывать 499 ₽ каждый месяц. Автопродление можно отключить здесь в любой момент.</label>
+            <button class="btn-main" id="payCard" onclick="buySubscription('bank_card')">Оплатить картой — 499 ₽</button>
+            <button class="btn-main" id="paySbp" onclick="buySubscription('sbp')">Оплатить через СБП — 499 ₽</button>
+            <button class="btn-main" id="checkPayment" onclick="checkPayment()" hidden>Проверить оплату</button>
+            <button class="btn-main" id="enableRenew" onclick="enableRenewal()" hidden>Включить автопродление — 499 ₽/месяц</button>
+            <button class="btn-main" id="disableRenew" onclick="disableRenewal()" hidden>Отключить автопродление</button>
+            <p>Без галочки — разовая оплата месяца. Автопродление включится только после оплаты и подтверждённого сохранения способа оплаты в ЮKassa.</p>
+        </div>
         <div class="profile-stats">
             <div class="stat-item"><div class="stat-num" id="profGroups">0</div><div class="stat-name">Групп</div></div>
             <div class="stat-item"><div class="stat-num" id="profClients">0</div><div class="stat-name">Клиентов</div></div>
@@ -210,8 +225,8 @@
         </div>
         <div class="menu-list">
             <div class="menu-item" onclick="switchTab('broadcast', document.querySelectorAll('.tab-item')[1])"><span class="menu-icon">👥</span> Мои группы <span class="menu-arrow">›</span></div>
-            <div class="menu-item">Касания сохраняются в планере. Push-уведомления не подключены.</div>
-            <div class="menu-item" onclick="alert('Оплата скоро будет доступна!')"><span class="menu-icon">💳</span> Реквизиты и оплата <span class="menu-arrow">›</span></div>
+            <div class="menu-item">Напоминания планера приходят в личный чат с ботом MAX.</div>
+            <div class="menu-item" onclick="document.getElementById('subscriptionPanel').scrollIntoView({behavior:'smooth'})"><span class="menu-icon">💳</span> Реквизиты и оплата <span class="menu-arrow">›</span></div>
             <div class="menu-item" onclick="alert('Откройте приложение из бота MAX. Для подключения группы добавьте бота администратором и укажите ID группы. Время отправки задаётся по часовому поясу устройства.')"><span class="menu-icon">❓</span> Помощь <span class="menu-arrow">›</span></div>
         </div>
         <button class="btn-logout" onclick="logout()">Выйти</button>

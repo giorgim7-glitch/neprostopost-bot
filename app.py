@@ -1,6 +1,7 @@
-import os, json, uuid, hmac, hashlib, sqlite3, logging, re
+import os, json, uuid, hmac, hashlib, sqlite3, logging, re, shutil
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from functools import wraps
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import parse_qsl
@@ -44,6 +45,15 @@ def init_db():
         c.execute('CREATE INDEX IF NOT EXISTS idx_app_jobs_due ON app_jobs(status,run_at)')
         c.execute('CREATE TABLE IF NOT EXISTS app_known_chats (chat_id TEXT PRIMARY KEY, title TEXT, active INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS app_bot_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+        user_columns={r['name'] for r in c.execute('PRAGMA table_info(app_users)')}
+        if 'paid_until' not in user_columns: c.execute('ALTER TABLE app_users ADD COLUMN paid_until TEXT')
+        if 'paid_is_test' not in user_columns: c.execute('ALTER TABLE app_users ADD COLUMN paid_is_test INTEGER NOT NULL DEFAULT 0')
+        c.execute('CREATE TABLE IF NOT EXISTS app_broadcast_usage (job_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, quota_day TEXT NOT NULL)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_broadcast_usage_day ON app_broadcast_usage(owner_id,quota_day)')
+        client_columns={r['name'] for r in c.execute('PRAGMA table_info(app_clients)')}
+        for name,declaration in [('prepared_message',"TEXT NOT NULL DEFAULT ''"),('reminder_at','TEXT'),('reminder_status',"TEXT NOT NULL DEFAULT 'disabled'"),('reminder_error','TEXT'),('reminder_attempts','INTEGER NOT NULL DEFAULT 0')]:
+            if name not in client_columns: c.execute(f'ALTER TABLE app_clients ADD COLUMN {name} {declaration}')
+        c.execute("INSERT OR IGNORE INTO app_broadcast_usage SELECT id,owner_id,date(run_at,'+3 hours') FROM app_jobs WHERE status IN ('scheduled','processing','sent','uncertain')")
         columns={r['name'] for r in c.execute('PRAGMA table_info(app_jobs)')}
         for name, declaration in [('attempts','INTEGER NOT NULL DEFAULT 0'), ('last_error','TEXT'), ('message_id','TEXT')]:
             if name not in columns: c.execute(f'ALTER TABLE app_jobs ADD COLUMN {name} {declaration}')
@@ -57,6 +67,25 @@ def parse_time(s):
     d=datetime.fromisoformat(s.replace('Z','+00:00'))
     if d.tzinfo is None: raise ValueError('Не указан часовой пояс')
     return d.astimezone(timezone.utc)
+
+def has_pro(connection, user_id):
+    row=connection.execute('SELECT paid_until,paid_is_test FROM app_users WHERE id=?',(user_id,)).fetchone()
+    return bool(row and row['paid_is_test']==int(os.getenv('YOOKASSA_TEST_MODE')=='1') and row['paid_until'] and parse_time(row['paid_until'])>utcnow())
+
+def pro_required(message):
+    return jsonify(code='subscription_required',message=message+' Подписка PRO — 499 ₽.'),402
+
+def quota_day(when):
+    return when.astimezone(ZoneInfo('Europe/Moscow')).date().isoformat()
+
+def reserve_broadcast(connection, user_id, job_id, when, chat_id):
+    if not has_pro(connection,user_id):
+        first=connection.execute('SELECT chat_id FROM app_groups WHERE owner_id=? ORDER BY rowid LIMIT 1',(user_id,)).fetchone()
+        if not first or first['chat_id'] != str(chat_id): return 'Бесплатно доступна одна группа для рассылки.'
+        used=connection.execute('SELECT COUNT(*) FROM app_broadcast_usage WHERE owner_id=? AND quota_day=? AND job_id!=?',(user_id,quota_day(when),job_id)).fetchone()[0]
+        if used>=1: return 'Бесплатно доступно одно сообщение в день (по московскому времени).'
+    connection.execute('INSERT OR REPLACE INTO app_broadcast_usage VALUES(?,?,?)',(job_id,user_id,quota_day(when)))
+    return None
 
 def verify_max(init_data):
     if not TOKEN or not isinstance(init_data,str) or len(init_data)>20000: return None
@@ -167,7 +196,7 @@ def auth_max():
 @require_auth
 def me():
     with db() as c: u=c.execute('SELECT * FROM app_users WHERE id=?',(g.user_id,)).fetchone()
-    return jsonify(user={'id':g.user_id,'first_name':u['first_name']},trial_end=u['trial_end'],subscription='trial' if parse_time(u['trial_end'])>utcnow() else 'expired')
+    return jsonify(user={'id':g.user_id,'first_name':u['first_name']},subscription='pro' if has_pro(c,g.user_id) else 'free',paid_until=u['paid_until'])
 
 @app.get('/api/get_chats')
 @require_auth
@@ -231,7 +260,11 @@ def connect_chat():
         title=r.json().get('title',f'Группа {chat_id}') if r.ok else f'Группа {chat_id}'
     except (requests.RequestException,ValueError): title=f'Группа {chat_id}'
     with db() as c:
-        c.execute('INSERT OR REPLACE INTO app_groups(owner_id,chat_id,title) VALUES(?,?,?)',(g.user_id,chat_id,title))
+        c.execute('BEGIN IMMEDIATE')
+        existing=c.execute('SELECT 1 FROM app_groups WHERE owner_id=? AND chat_id=?',(g.user_id,chat_id)).fetchone()
+        count=c.execute('SELECT COUNT(*) FROM app_groups WHERE owner_id=?',(g.user_id,)).fetchone()[0]
+        if not existing and count>=1 and not has_pro(c,g.user_id): return pro_required('Бесплатно можно подключить одну группу.')
+        c.execute('INSERT INTO app_groups(owner_id,chat_id,title) VALUES(?,?,?) ON CONFLICT(owner_id,chat_id) DO UPDATE SET title=excluded.title',(g.user_id,chat_id,title))
         c.commit()
     return jsonify(status='ok',title=title)
 
@@ -250,10 +283,13 @@ def catalog():
 def add_catalog():
     title=request.form.get('title','').strip()
     if not title: return jsonify(message='Введите название'),400
-    try: names=save_images()
-    except ValueError as e: return jsonify(message=str(e)),400
     item_id=uuid.uuid4().hex
     with db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        count=c.execute('SELECT COUNT(*) FROM app_catalog WHERE owner_id=?',(g.user_id,)).fetchone()[0]
+        if count>=1 and not has_pro(c,g.user_id): return pro_required('Бесплатно можно сохранить один объект.')
+        try: names=save_images()
+        except ValueError as e: return jsonify(message=str(e)),400
         c.execute('INSERT INTO app_catalog VALUES(?,?,?,?,?,?,?,?,?,?)',(item_id,g.user_id,title,request.form.get('description',''),request.form.get('price',''),request.form.get('tag',''),request.form.get('address',''),request.form.get('category',request.form.get('tag','Новостройка')),json.dumps(names),iso(utcnow())))
         c.commit()
     return jsonify(status='ok',id=item_id),201
@@ -268,21 +304,30 @@ def image_file(item_id,filename):
 @app.get('/api/get_clients')
 @require_auth
 def clients():
+    with db() as c:
+        if not has_pro(c,g.user_id): return pro_required('Планер доступен по подписке PRO.')
     with db() as c: rows=c.execute('SELECT * FROM app_clients WHERE owner_id=? ORDER BY schedule_time',(g.user_id,)).fetchall()
-    return jsonify(clients=[dict(id=r['id'],name=r['name'],phone=r['phone'],text=r['text'],type=r['type'],schedule_time=r['schedule_time'],status=r['status']) for r in rows])
+    return jsonify(clients=[dict(id=r['id'],name=r['name'],phone=r['phone'],text=r['text'],type=r['type'],schedule_time=r['schedule_time'],status=r['status'],prepared_message=r['prepared_message'],reminder_status=r['reminder_status'],reminder_error=r['reminder_error']) for r in rows])
 
 @app.post('/api/add_client')
 @require_auth
 def add_client():
+    with db() as c:
+        if not has_pro(c,g.user_id): return pro_required('Планер доступен по подписке PRO.')
     name=request.form.get('name','').strip()
     date=request.form.get('date','').strip(); tm=request.form.get('time','').strip()
     if not name or not date or not tm: return jsonify(message='Укажите имя, дату и время'),400
     try: when=parse_time(request.form.get('run_at',''))
     except ValueError: return jsonify(message='Ошибка даты или часового пояса'),400
     if when<=utcnow(): return jsonify(message='Дата должна быть в будущем'),400
+    try: remind=parse_time(request.form.get('reminder_at') or iso(when))
+    except ValueError: return jsonify(message='Некорректное время напоминания'),400
+    if remind<=utcnow() or remind>when: return jsonify(message='Напоминание должно быть в будущем и не позже контакта'),400
+    prepared=request.form.get('prepared_message','').strip()
+    if len(prepared)>2000 or len(request.form.get('text',''))>1000 or len(name)>200: return jsonify(message='Слишком длинное имя, заметка или сообщение'),400
     cid=uuid.uuid4().hex
     with db() as c:
-        c.execute('INSERT INTO app_clients VALUES(?,?,?,?,?,?,?,?)',(cid,g.user_id,name,request.form.get('phone',''),request.form.get('text',''),request.form.get('type','Звонок'),iso(when),'Запланировано'))
+        c.execute('INSERT INTO app_clients(id,owner_id,name,phone,text,type,schedule_time,status,prepared_message,reminder_at,reminder_status) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(cid,g.user_id,name,request.form.get('phone',''),request.form.get('text',''),request.form.get('type','Звонок'),iso(when),'Запланировано',prepared,iso(remind),'scheduled'))
         c.commit()
     return jsonify(status='ok',id=cid),201
 
@@ -291,7 +336,7 @@ def add_client():
 def jobs():
     with db() as c:
         rows=c.execute('SELECT id,text,run_at,status,last_error FROM app_jobs WHERE owner_id=? ORDER BY run_at',(g.user_id,)).fetchall()
-        people=c.execute('SELECT id,name,text,schedule_time,status FROM app_clients WHERE owner_id=? ORDER BY schedule_time',(g.user_id,)).fetchall()
+        people=c.execute('SELECT id,name,text,schedule_time,status FROM app_clients WHERE owner_id=? ORDER BY schedule_time',(g.user_id,)).fetchall() if has_pro(c,g.user_id) else []
     tasks=[dict(id=r['id'],type='group',schedule=r['run_at'],text=r['text'],status=r['status'],error=r['last_error']) for r in rows]
     tasks += [dict(id=r['id'],type='client',schedule=r['schedule_time'],text=f"{r['name']}: {r['text']}",status=r['status']) for r in people]
     return jsonify(jobs=sorted(tasks,key=lambda x:x['schedule']))
@@ -300,20 +345,39 @@ def jobs():
 @require_auth
 def submit_ad():
     chat_id=request.form.get('chat_id','').strip(); text=request.form.get('text','').strip()
+    catalog_id=request.form.get('catalog_id','').strip()
+    catalog=None
+    if catalog_id:
+        with db() as c: catalog=c.execute('SELECT * FROM app_catalog WHERE id=? AND owner_id=?',(catalog_id,g.user_id)).fetchone()
+        if not catalog: return jsonify(message='Объект каталога не найден'),404
+        if not text: text='\n'.join(str(catalog[k]) for k in ('title','address','price','description') if catalog[k])
     if len(text)>4000: return jsonify(message='Текст не должен превышать 4000 символов'),400
     if not TOKEN: return jsonify(message='MAX_BOT_TOKEN не задан'),503
-    if not chat_id or not text: return jsonify(message='Выберите группу и напишите текст'),400
+    if not chat_id or not text: return jsonify(message='Выберите группу и напишите текст или выберите объект'),400
     if not owned_group(chat_id): return jsonify(message='Группа не подключена к вашему аккаунту'),403
     try: when=parse_time(request.form.get('run_at',''))
     except ValueError: return jsonify(message='Укажите корректные дату, время и часовой пояс'),400
     if when<=utcnow(): return jsonify(message='Дата должна быть в будущем'),400
     if get_admin_group(chat_id,g.user_id) is not True: return jsonify(message='Не удалось подтвердить права администратора'),403
-    try: names=save_images()
-    except ValueError as e: return jsonify(message=str(e)),400
     jid=uuid.uuid4().hex
-    with db() as c:
-        c.execute('INSERT INTO app_jobs(id,owner_id,chat_id,text,run_at,repeat_daily,status,images) VALUES(?,?,?,?,?,?,?,?)',(jid,g.user_id,chat_id,text,iso(when),0,'scheduled',json.dumps(names)))
-        c.commit()
+    names=[]
+    try:
+        with db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            limit=reserve_broadcast(c,g.user_id,jid,when,chat_id)
+            if limit: return pro_required(limit)
+            if catalog:
+                # Snapshot photos so deleting the catalogue item cannot break a pending ad.
+                for source in image_names(catalog['images']):
+                    name=uuid.uuid4().hex+Path(source).suffix
+                    names.append(name); shutil.copyfile(UPLOAD/source,UPLOAD/name)
+            names.extend(save_images())
+            if len(names)>10: raise ValueError('В рассылке допускается не более 10 изображений')
+            c.execute('INSERT INTO app_jobs(id,owner_id,chat_id,text,run_at,repeat_daily,status,images) VALUES(?,?,?,?,?,?,?,?)',(jid,g.user_id,chat_id,text,iso(when),0,'scheduled',json.dumps(names)))
+            c.commit()
+    except (ValueError,OSError) as error:
+        for name in names: (UPLOAD/name).unlink(missing_ok=True)
+        return jsonify(message=str(error) if isinstance(error,ValueError) else 'Не удалось подготовить фото объекта'),400
     return jsonify(status='ok',id=jid,message='Рассылка запланирована.'),201
 
 @app.get('/api/get_stats')
@@ -332,10 +396,19 @@ def delete_job(job_id,job_type):
     with db() as c:
         c.execute('BEGIN IMMEDIATE')
         if table == 'app_jobs':
-            row=c.execute('SELECT status FROM app_jobs WHERE id=? AND owner_id=?',(job_id,g.user_id)).fetchone()
+            row=c.execute('SELECT status,images FROM app_jobs WHERE id=? AND owner_id=?',(job_id,g.user_id)).fetchone()
             if row and row['status'] == 'processing': return jsonify(message='Рассылка уже отправляется'),409
+        else:
+            client=c.execute('SELECT reminder_status FROM app_clients WHERE id=? AND owner_id=?',(job_id,g.user_id)).fetchone()
+            if client and client['reminder_status']=='processing': return jsonify(message='Напоминание уже отправляется'),409
+        if table == 'app_jobs' and row and row['status'] in ('scheduled','failed','cancelled'):
+            c.execute('DELETE FROM app_broadcast_usage WHERE job_id=?',(job_id,))
         c.execute(f'DELETE FROM {table} WHERE id=? AND owner_id=?',(job_id,g.user_id))
         c.commit()
+    if table == 'app_jobs' and row:
+        for name in image_names(row['images']):
+            try: (UPLOAD/name).unlink(missing_ok=True)
+            except OSError: LOG.warning('Не удалось удалить фото удалённой рассылки')
     return jsonify(status='ok')
 
 
@@ -372,9 +445,14 @@ def disconnect_chat(chat_id):
         if c.execute("SELECT 1 FROM app_jobs WHERE owner_id=? AND chat_id=? AND status='processing'",(g.user_id,chat_id)).fetchone():
             return jsonify(message='Дождитесь окончания отправки'),409
         c.execute('DELETE FROM app_groups WHERE owner_id=? AND chat_id=?',(g.user_id,chat_id))
+        c.execute("DELETE FROM app_broadcast_usage WHERE job_id IN (SELECT id FROM app_jobs WHERE owner_id=? AND chat_id=? AND status='scheduled')",(g.user_id,chat_id))
         c.execute("UPDATE app_jobs SET status='cancelled' WHERE owner_id=? AND chat_id=? AND status='scheduled'",(g.user_id,chat_id))
         c.commit()
     return jsonify(status='ok')
+
+import sys
+import billing
+billing.init(sys.modules[__name__])
 
 if __name__=='__main__':
     app.run(host='0.0.0.0',port=int(os.getenv('PORT','3000')))

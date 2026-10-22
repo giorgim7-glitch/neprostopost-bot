@@ -72,6 +72,7 @@ def remember(db, event):
         active=excluded.active,updated_at=excluded.updated_at''',
         (chat_id, title, active, backend.iso(backend.utcnow())))
     if not active:
+        db.execute("DELETE FROM app_broadcast_usage WHERE job_id IN (SELECT id FROM app_jobs WHERE chat_id=? AND status='scheduled')",(chat_id,))
         db.execute("UPDATE app_jobs SET status='cancelled',last_error='Бот удалён из группы' WHERE chat_id=? AND status='scheduled'", (chat_id,))
 
 
