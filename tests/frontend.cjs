@@ -1,0 +1,82 @@
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const {spawn} = require('node:child_process');
+const {JSDOM} = require('jsdom');
+const root = path.resolve(__dirname, '..');
+const python = process.env.TEST_PYTHON || '/workspace/.venvs/neprostopost-bot/bin/python';
+const child = spawn(python, [path.join(__dirname,'frontend_server.py')], {stdio:['ignore','pipe','inherit']});
+const waitFor = async predicate => {
+  for (let i=0;i<100;i++) { if (predicate()) return; await new Promise(r=>setTimeout(r,30)); }
+  throw Error('Timed out waiting for frontend');
+};
+const initData = () => {
+  const values = {auth_date:String(Math.floor(Date.now()/1000)),user:JSON.stringify({id:123,first_name:'Тест'})};
+  const secret=crypto.createHmac('sha256','WebAppData').update('synthetic-test-key-not-a-real-token').digest();
+  const content=Object.keys(values).sort().map(k=>`${k}=${values[k]}`).join('\n');
+  values.hash=crypto.createHmac('sha256',secret).update(content).digest('hex');
+  return new URLSearchParams(values).toString();
+};
+function createDOM(html,url,webapp) {
+  const dom = new JSDOM(html,{url,runScripts:'outside-only'});
+  const w=dom.window;
+  w.Headers=Headers; w.FormData=FormData;
+  w.URL.createObjectURL=()=> 'blob:test-image'; w.URL.revokeObjectURL=()=>{};
+  w.fetch=(resource,options)=>fetch(new URL(resource,url),options);
+  w.alert=()=>{};
+  if(webapp) w.WebApp=webapp;
+  vm.runInContext(fs.readFileSync(path.join(root,'static/app.js'),'utf8'),dom.getInternalVMContext());
+  return dom;
+}
+(async()=>{
+  const port = await new Promise((resolve,reject)=>{
+    let text=''; child.stdout.on('data',chunk=>{text+=chunk; if(text.includes('\n')) resolve(Number(text.trim()));});
+    child.on('error',reject); child.on('exit',code=>reject(Error('Test server exited '+code)));
+  });
+  const url=`http://127.0.0.1:${port}`;
+  const html=await (await fetch(url)).text();
+  const outside=createDOM(html,url);
+  await waitFor(()=>outside.window.document.getElementById('appNotice').textContent.includes('из бота MAX'));
+  await outside.window.addClient();
+  assert.match(outside.window.document.getElementById('appNotice').textContent,/MAX/);
+  outside.window.close();
+  const dom=createDOM(html,url,{ready(){},initData:initData()});
+  const w=dom.window, $=id=>w.document.getElementById(id);
+  await waitFor(()=>$('profName').textContent==='Тест');
+  assert.ok(w.sessionStorage.getItem('neprostopost.session'));
+  $('clientName').value='Клиент'; $('clientText').value='Встреча по объекту'; $('clientType').value='Встреча';
+  await w.addClient();
+  assert.match($('clientsList').textContent,/Клиент/);
+  assert.match($('clientsList').textContent,/Встреча/);
+  assert.ok(!$('clientsList').textContent.includes('undefined'));
+  await w.loadDashboard(); assert.equal($('statClients').textContent,'1');
+  $('catTitle').value='<img src=x onerror="window.pwned=true">'; $('catDescription').value='Описание';
+  const file = new File([new Uint8Array([137,80,78,71,13,10,26,10,0])],'photo.png',{type:'image/png'});
+  Object.defineProperty($('catImages'),'files',{configurable:true,value:[file]});
+  await w.saveCatalogItem();
+  assert.ok($('catalogList').textContent.includes('<img src=x'));
+  assert.equal($('catalogList').querySelector('img[src="x"]'),null);
+  await waitFor(()=>$('catalogList').querySelector('img.obj-img'));
+  assert.equal(w.pwned,undefined);
+  $('catalogSearch').value='нет такого объекта'; w.renderCatalog();
+  assert.match($('catalogList').textContent,/не найдено/);
+  $('catalogSearch').value=''; w.renderCatalog();
+  $('groupId').value='-123'; await w.connectChat(); assert.match($('groupsList').textContent,/Тестовая группа/);
+  $('adText').value='Тестовая рассылка'; await w.sendBroadcast();
+  assert.match($('broadcastJobs').textContent,/Тестовая рассылка/);
+  assert.match($('broadcastJobs').textContent,/Запланировано/);
+  const groupButton=$('groupsList').querySelector('button[data-disconnect]'); groupButton.click();
+  await waitFor(()=>$('broadcastJobs').textContent.includes('Отменено'));
+  const deleteCatalog=$('catalogList').querySelector('[data-delete-catalog]'); deleteCatalog.click();
+  await waitFor(()=>$('catalogList').textContent.includes('не найдено'));
+  const deleteClient=$('clientsList').querySelector('[data-delete-job]'); deleteClient.click();
+  await waitFor(()=>$('clientsList').textContent.includes('Пока нет'));
+  const token=w.sessionStorage.getItem('neprostopost.session');
+  await fetch(url+'/api/auth/logout',{method:'POST',headers:{Authorization:'Bearer '+token}});
+  await assert.rejects(w.api('/me'));
+  assert.equal(w.sessionStorage.getItem('neprostopost.session'),null);
+  dom.window.close();
+  console.log('PASS: DOM + real HTTP API: outside MAX, signed login, client/date CRUD, statistics, catalog/photo upload/read/delete, XSS escaping, search, group connect/disconnect, scheduling/cancellation, expired session. MAX network calls use fixtures.');
+})().catch(error=>{console.error(error);process.exitCode=1;}).finally(()=>child.kill());

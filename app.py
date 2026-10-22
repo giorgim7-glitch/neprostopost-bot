@@ -10,7 +10,7 @@ from werkzeug.utils import secure_filename
 
 TOKEN=os.getenv('MAX_BOT_TOKEN','').strip()
 BASE='https://platform-api2.max.ru'
-DATA=Path(os.getenv('DATA_DIR','/app/data'))
+DATA=Path(os.getenv('DATA_DIR',str(Path(__file__).resolve().parent / '.data')))
 DATA.mkdir(parents=True,exist_ok=True)
 DB=Path(os.getenv('DB_PATH',str(DATA/'data.db')))
 DB.parent.mkdir(parents=True,exist_ok=True)
@@ -31,6 +31,7 @@ def db():
 
 def init_db():
     with db() as c:
+        c.execute('BEGIN IMMEDIATE')
         c.execute('CREATE TABLE IF NOT EXISTS app_users (id TEXT PRIMARY KEY, first_name TEXT, created_at TEXT NOT NULL, trial_end TEXT NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS app_sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at TEXT NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS app_catalog (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, title TEXT NOT NULL, description TEXT, price TEXT, tag TEXT, address TEXT, category TEXT, images TEXT, created_at TEXT NOT NULL)')
@@ -38,12 +39,16 @@ def init_db():
         c.execute('CREATE TABLE IF NOT EXISTS app_groups (owner_id TEXT NOT NULL, chat_id TEXT NOT NULL, title TEXT NOT NULL, PRIMARY KEY(owner_id,chat_id))')
         c.execute('CREATE TABLE IF NOT EXISTS app_jobs (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, chat_id TEXT NOT NULL, text TEXT NOT NULL, run_at TEXT NOT NULL, repeat_daily INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT "scheduled", images TEXT NOT NULL DEFAULT "[]")')
         c.execute('CREATE INDEX IF NOT EXISTS idx_app_jobs_due ON app_jobs(status,run_at)')
+        columns={r['name'] for r in c.execute('PRAGMA table_info(app_jobs)')}
+        for name, declaration in [('attempts','INTEGER NOT NULL DEFAULT 0'), ('last_error','TEXT'), ('message_id','TEXT')]:
+            if name not in columns: c.execute(f'ALTER TABLE app_jobs ADD COLUMN {name} {declaration}')
         c.commit()
 init_db()
 
 def utcnow(): return datetime.now(timezone.utc)
 def iso(d): return d.astimezone(timezone.utc).isoformat()
 def parse_time(s):
+    if not isinstance(s,str): raise ValueError('Некорректная дата')
     d=datetime.fromisoformat(s.replace('Z','+00:00'))
     if d.tzinfo is None: raise ValueError('Не указан часовой пояс')
     return d.astimezone(timezone.utc)
@@ -96,8 +101,8 @@ def get_admin_group(chat_id,user_id):
             if str(u.get('user_id',u.get('id','')))==str(user_id):
                 return True
         return False
-    except (requests.RequestException,ValueError,TypeError,KeyError):
-        LOG.exception('Не удалось проверить права администратора MAX')
+    except (requests.RequestException,ValueError,TypeError,KeyError,RuntimeError):
+        LOG.warning('Не удалось проверить права администратора MAX')
         return None
 
 def owned_group(chat_id):
@@ -110,27 +115,40 @@ def image_names(value):
     return [n for n in names if isinstance(n,str) and re.fullmatch(r'[a-f0-9]{32}\.(jpg|jpeg|png|webp|gif)',n)]
 
 def save_images():
-    names=[]
-    for f in request.files.getlist('images'):
-        if not f.filename: continue
+    files=[f for f in request.files.getlist('images') if f.filename]
+    if len(files)>10: raise ValueError('Не более 10 изображений')
+    validated=[]
+    # Validate every file before writing any; a bad later image must not leave orphans.
+    for f in files:
         ext=Path(secure_filename(f.filename)).suffix.lower()
         if ext not in ('.jpg','.jpeg','.png','.webp','.gif'): raise ValueError('Недопустимый формат изображения')
-        # Check actual magic bytes rather than trusting extensions.
         head=f.stream.read(16)
         f.stream.seek(0)
         valid=(head.startswith(b'\xff\xd8\xff') and ext in ('.jpg','.jpeg')) or (head.startswith(b'\x89PNG\r\n\x1a\n') and ext=='.png') or (head.startswith((b'GIF87a',b'GIF89a')) and ext=='.gif') or (head[:4]==b'RIFF' and head[8:12]==b'WEBP' and ext=='.webp')
         if not valid: raise ValueError('Файл не является изображением выбранного формата')
-        name=uuid.uuid4().hex+ext
-        f.save(UPLOAD/name)
-        names.append(name)
+        validated.append((f,uuid.uuid4().hex+ext))
+    names=[]
+    try:
+        for f,name in validated:
+            names.append(name)
+            f.save(UPLOAD/name)
+    except OSError:
+        for name in names: (UPLOAD/name).unlink(missing_ok=True)
+        raise
     return names
 
 @app.get('/')
-def home(): return jsonify(status='ok',service='Непростопост API v1')
+def home(): return app.send_static_file('index.html')
+
+@app.get('/api/health')
+def health(): return jsonify(status='ok', service='Непростопост API v1', max_configured=bool(TOKEN))
 
 @app.post('/api/auth/max')
 def auth_max():
-    user=verify_max((request.get_json(silent=True) or {}).get('init_data'))
+    payload=request.get_json(silent=True)
+    if not isinstance(payload,dict): return jsonify(message='Ожидается JSON-объект'),400
+    user=verify_max(payload.get('init_data'))
+    if not TOKEN: return jsonify(message='Сервер не настроен: требуется MAX_BOT_TOKEN'),503
     if not user: return jsonify(message='Не удалось подтвердить запуск через MAX. Откройте Mini App из бота.'),401
     uid=str(user['id']); now=utcnow(); trial=iso(now+timedelta(days=3))
     with db() as c:
@@ -155,7 +173,8 @@ def chats():
 @app.post('/api/connect_chat')
 @require_auth
 def connect_chat():
-    data=request.get_json(silent=True) or {}
+    data=request.get_json(silent=True)
+    if not isinstance(data,dict): return jsonify(message='Ожидается JSON-объект'),400
     chat_id=str(data.get('chat_id','')).strip()
     if not re.fullmatch(r'-?\d+',chat_id): return jsonify(message='Введите числовой ID группы'),400
     result=get_admin_group(chat_id,g.user_id)
@@ -176,7 +195,7 @@ def catalog():
     with db() as c: rows=c.execute('SELECT * FROM app_catalog WHERE owner_id=? ORDER BY created_at DESC',(g.user_id,)).fetchall()
     items=[]
     for r in rows:
-        urls=[request.host_url.rstrip('/')+f'/api/images/{r["id"]}/{n}' for n in image_names(r['images'])]
+        urls=[f'/api/images/{r["id"]}/{n}' for n in image_names(r['images'])]
         items.append(dict(id=r['id'],title=r['title'],description=r['description'],price=r['price'],tag=r['tag'],category=r['category'],address=r['address'],image_urls=urls,image_url=urls[0] if urls else None))
     return jsonify(catalog=items)
 
@@ -225,9 +244,9 @@ def add_client():
 @require_auth
 def jobs():
     with db() as c:
-        rows=c.execute('SELECT id,text,run_at,status FROM app_jobs WHERE owner_id=? ORDER BY run_at',(g.user_id,)).fetchall()
+        rows=c.execute('SELECT id,text,run_at,status,last_error FROM app_jobs WHERE owner_id=? ORDER BY run_at',(g.user_id,)).fetchall()
         people=c.execute('SELECT id,name,text,schedule_time,status FROM app_clients WHERE owner_id=? ORDER BY schedule_time',(g.user_id,)).fetchall()
-    tasks=[dict(id=r['id'],type='group',schedule=r['run_at'],text=r['text'],status=r['status']) for r in rows]
+    tasks=[dict(id=r['id'],type='group',schedule=r['run_at'],text=r['text'],status=r['status'],error=r['last_error']) for r in rows]
     tasks += [dict(id=r['id'],type='client',schedule=r['schedule_time'],text=f"{r['name']}: {r['text']}",status=r['status']) for r in people]
     return jsonify(jobs=sorted(tasks,key=lambda x:x['schedule']))
 
@@ -235,6 +254,8 @@ def jobs():
 @require_auth
 def submit_ad():
     chat_id=request.form.get('chat_id','').strip(); text=request.form.get('text','').strip()
+    if len(text)>4000: return jsonify(message='Текст не должен превышать 4000 символов'),400
+    if not TOKEN: return jsonify(message='MAX_BOT_TOKEN не задан'),503
     if not chat_id or not text: return jsonify(message='Выберите группу и напишите текст'),400
     if not owned_group(chat_id): return jsonify(message='Группа не подключена к вашему аккаунту'),403
     try: when=parse_time(request.form.get('run_at',''))
@@ -245,10 +266,9 @@ def submit_ad():
     except ValueError as e: return jsonify(message=str(e)),400
     jid=uuid.uuid4().hex
     with db() as c:
-        c.execute('INSERT INTO app_jobs VALUES(?,?,?,?,?,?,?,?)',(jid,g.user_id,chat_id,text,iso(when),0,'scheduled',json.dumps(names)))
+        c.execute('INSERT INTO app_jobs(id,owner_id,chat_id,text,run_at,repeat_daily,status,images) VALUES(?,?,?,?,?,?,?,?)',(jid,g.user_id,chat_id,text,iso(when),0,'scheduled',json.dumps(names)))
         c.commit()
-    # Sending disabled until a single dedicated worker with retry/locking is configured.
-    return jsonify(status='ok',id=jid,message='Черновик расписания сохранён. Автоматическая отправка пока отключена.'),201
+    return jsonify(status='ok',id=jid,message='Рассылка запланирована.'),201
 
 @app.get('/api/get_stats')
 @require_auth
@@ -264,7 +284,49 @@ def delete_job(job_id,job_type):
     table={'group':'app_jobs','client':'app_clients'}.get(job_type)
     if not table: return jsonify(message='Неизвестный тип'),400
     with db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        if table == 'app_jobs':
+            row=c.execute('SELECT status FROM app_jobs WHERE id=? AND owner_id=?',(job_id,g.user_id)).fetchone()
+            if row and row['status'] == 'processing': return jsonify(message='Рассылка уже отправляется'),409
         c.execute(f'DELETE FROM {table} WHERE id=? AND owner_id=?',(job_id,g.user_id))
+        c.commit()
+    return jsonify(status='ok')
+
+
+
+@app.post('/api/auth/logout')
+@require_auth
+def logout():
+    digest=hashlib.sha256(request.headers['Authorization'][7:].encode()).hexdigest()
+    with db() as c:
+        c.execute('DELETE FROM app_sessions WHERE token_hash=?',(digest,))
+        c.commit()
+    return jsonify(status='ok')
+
+@app.errorhandler(413)
+def too_large(error):
+    return jsonify(message='Размер запроса превышает 20 МБ'),413
+
+@app.delete('/api/catalog/<item_id>')
+@require_auth
+def delete_catalog(item_id):
+    with db() as c:
+        row=c.execute('SELECT images FROM app_catalog WHERE id=? AND owner_id=?',(item_id,g.user_id)).fetchone()
+        if not row: return jsonify(message='Объект не найден'),404
+        c.execute('DELETE FROM app_catalog WHERE id=? AND owner_id=?',(item_id,g.user_id))
+        c.commit()
+    for name in image_names(row['images']): (UPLOAD/name).unlink(missing_ok=True)
+    return jsonify(status='ok')
+
+@app.delete('/api/groups/<chat_id>')
+@require_auth
+def disconnect_chat(chat_id):
+    with db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        if c.execute("SELECT 1 FROM app_jobs WHERE owner_id=? AND chat_id=? AND status='processing'",(g.user_id,chat_id)).fetchone():
+            return jsonify(message='Дождитесь окончания отправки'),409
+        c.execute('DELETE FROM app_groups WHERE owner_id=? AND chat_id=?',(g.user_id,chat_id))
+        c.execute("UPDATE app_jobs SET status='cancelled' WHERE owner_id=? AND chat_id=? AND status='scheduled'",(g.user_id,chat_id))
         c.commit()
     return jsonify(status='ok')
 

@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Непростопост</title>
+    <script src="https://st.max.ru/js/max-web-app.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root { --bg: #F8F9FA; --card: #FFFFFF; --text: #1A1D23; --muted: #8B95A5; --accent: #0F766E; --accent-light: #CCFBF1; --border: #E5E7EB; --shadow: 0 4px 20px rgba(0,0,0,0.04); }
+        body { font-family: 'Manrope', sans-serif; background: var(--bg); margin: 0; padding: 0; color: var(--text); padding-bottom: 90px; }
+        .header { padding: 20px; display: flex; justify-content: space-between; align-items: center; background: var(--bg); position: sticky; top: 0; z-index: 10; }
+        .header h1 { font-size: 20px; font-weight: 800; margin: 0; }
+        .avatar { width: 36px; height: 36px; border-radius: 50%; background: #E5E7EB; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+        .container { padding: 0 20px; max-width: 600px; margin: 0 auto; }
+        .screen { display: none; }
+        .screen.active { display: block; animation: fadeIn 0.3s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        
+        .hero-card { background: linear-gradient(135deg, #0F172A 0%, #0F766E 100%); color: white; padding: 24px; border-radius: 24px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end; }
+        .hero-card h2 { margin: 0; font-size: 36px; font-weight: 800; line-height: 1; }
+        .hero-card p { margin: 5px 0 0 0; font-size: 13px; opacity: 0.9; }
+        
+        .stats-row { display: flex; justify-content: space-between; padding: 15px 0; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+        .stat-item { text-align: center; flex: 1; }
+        .stat-item:not(:last-child) { border-right: 1px solid var(--border); }
+        .stat-num { font-size: 20px; font-weight: 800; }
+        .stat-name { font-size: 11px; color: var(--muted); margin-top: 4px; }
+        .section-title { font-size: 15px; font-weight: 700; margin-bottom: 15px; display: flex; justify-content: space-between; }
+        .section-title a { color: var(--accent); font-size: 12px; text-decoration: none; font-weight: 600; }
+        .action-btn { background: var(--card); padding: 16px; border-radius: 16px; display: flex; align-items: center; gap: 15px; margin-bottom: 10px; box-shadow: var(--shadow); cursor: pointer; }
+        .action-icon { width: 40px; height: 40px; border-radius: 10px; background: var(--bg); display: flex; align-items: center; justify-content: center; font-size: 18px; color: var(--accent); }
+        .action-text { font-weight: 700; font-size: 14px; flex: 1; }
+        .action-sub { font-size: 12px; color: var(--muted); font-weight: 400; margin-top: 2px; }
+        .action-arrow { color: var(--muted); font-size: 18px; }
+
+        .tab-switch { display: flex; background: var(--bg); border-radius: 12px; padding: 4px; margin-bottom: 20px; border: 1px solid var(--border); }
+        .tab-switch-btn { flex: 1; text-align: center; padding: 10px; font-size: 13px; font-weight: 700; color: var(--muted); border-radius: 8px; cursor: pointer; }
+        .tab-switch-btn.active { background: var(--card); color: var(--text); box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+
+        .group-card { display: flex; align-items: center; gap: 15px; padding: 15px 0; border-bottom: 1px solid var(--border); }
+        .group-icon { width: 44px; height: 44px; border-radius: 12px; background: var(--text); color: white; display: flex; align-items: center; justify-content: center; font-size: 20px; }
+        .group-info { flex: 1; }
+        .group-name { font-weight: 700; font-size: 14px; }
+        .group-members { font-size: 12px; color: var(--muted); margin-top: 2px; }
+        .status-dot { color: #10B981; font-size: 12px; font-weight: 700; display: flex; align-items: center; gap: 4px; }
+
+        .calendar-row { display: flex; justify-content: space-between; margin-bottom: 20px; }
+        .cal-day { text-align: center; font-size: 11px; color: var(--muted); }
+        .cal-num { font-size: 16px; font-weight: 700; color: var(--text); margin-top: 5px; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 50%; }
+        .cal-day.active .cal-num { background: var(--text); color: white; }
+        .cal-day.active .cal-name { color: var(--text); font-weight: 700; }
+
+        .task-card { background: var(--card); padding: 16px; border-radius: 20px; margin-bottom: 12px; box-shadow: var(--shadow); display: flex; align-items: center; gap: 15px; }
+        .task-time { font-size: 13px; font-weight: 800; color: var(--text); width: 45px; text-align: center; }
+        .task-icon-box { width: 44px; height: 44px; border-radius: 14px; background: var(--accent-light); display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
+        .task-content { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 3px; }
+        .task-title { font-weight: 800; font-size: 15px; color: var(--text); line-height: 1.2; }
+        .task-sub { font-size: 13px; color: var(--muted); font-weight: 500; }
+        .task-phone { font-size: 13px; color: var(--accent); font-weight: 700; display: flex; align-items: center; gap: 5px; margin-top: 2px; }
+        .badge { font-size: 11px; padding: 6px 10px; border-radius: 10px; background: var(--accent-light); color: var(--accent); font-weight: 800; flex-shrink: 0; align-self: flex-start; margin-top: 2px; }
+
+        .search-bar { background: var(--card); border-radius: 12px; padding: 12px 15px; display: flex; align-items: center; gap: 10px; color: var(--muted); margin-bottom: 15px; border: 1px solid var(--border); }
+        .filter-scroll { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 15px; margin-bottom: 15px; scrollbar-width: none; }
+        .filter-btn { padding: 8px 16px; background: var(--card); border: 1px solid var(--border); border-radius: 20px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+        .filter-btn.active { background: var(--text); color: white; border-color: var(--text); }
+
+        .obj-card { background: var(--card); border-radius: 20px; margin-bottom: 20px; box-shadow: var(--shadow); overflow: hidden; }
+        .obj-img { width: 100%; height: 200px; background: #E5E7EB; object-fit: cover; }
+        .obj-info { padding: 15px; position: relative; }
+        .obj-tag { position: absolute; top: -15px; left: 15px; background: var(--card); padding: 5px 10px; border-radius: 8px; font-size: 11px; font-weight: 800; color: var(--text); box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .obj-title { font-weight: 800; font-size: 18px; margin: 0; }
+        .obj-addr { font-size: 12px; color: var(--muted); margin: 5px 0; display: flex; align-items: center; gap: 5px; }
+        .obj-price { font-weight: 800; font-size: 18px; margin-top: 10px; }
+        .obj-desc { font-size: 12px; color: var(--muted); margin-top: 5px; }
+
+        .profile-head { text-align: center; margin-bottom: 20px; }
+        .profile-avatar { width: 80px; height: 80px; border-radius: 50%; background: var(--border); margin: 0 auto 10px; }
+        .profile-name { font-size: 18px; font-weight: 800; margin: 0; }
+        .profile-role { font-size: 12px; color: var(--muted); }
+        .pro-badge { background: var(--text); color: white; font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 4px; display: inline-block; margin-top: 5px; }
+        .profile-stats { display: flex; background: var(--card); border-radius: 16px; padding: 15px 0; margin-bottom: 20px; box-shadow: var(--shadow); }
+        .profile-stats .stat-item { flex: 1; text-align: center; }
+        .profile-stats .stat-num { font-size: 18px; font-weight: 800; }
+        .profile-stats .stat-name { font-size: 10px; color: var(--muted); margin-top: 4px; }
+        .menu-list { background: var(--card); border-radius: 16px; overflow: hidden; margin-bottom: 20px; box-shadow: var(--shadow); }
+        .menu-item { padding: 16px; display: flex; align-items: center; gap: 15px; border-bottom: 1px solid var(--border); font-size: 14px; font-weight: 600; }
+        .menu-item:last-child { border-bottom: none; }
+        .menu-icon { font-size: 20px; color: var(--muted); }
+        .menu-arrow { margin-left: auto; color: var(--muted); }
+        .btn-logout { display: block; width: 100%; padding: 16px; background: #FEE2E2; color: #EF4444; text-align: center; border-radius: 16px; font-weight: 700; margin-top: 20px; text-decoration: none; }
+
+        .tab-bar { position: fixed; bottom: 0; left: 0; width: 100%; height: 85px; background: var(--card); border-top: 1px solid var(--border); display: flex; justify-content: space-around; align-items: center; z-index: 100; padding-bottom: env(safe-area-inset-bottom); }
+        .tab-item { text-align: center; color: var(--muted); font-size: 10px; font-weight: 700; cursor: pointer; flex: 1; padding: 10px; }
+        .tab-item.active { color: var(--accent); }
+        .tab-icon { display: block; font-size: 24px; margin-bottom: 4px; }
+
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 5px; }
+        .form-group input, .form-group textarea, .form-group select { width: 100%; padding: 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 12px; font-size: 14px; box-sizing: border-box; font-family: 'Manrope'; }
+        .btn-main { width: 100%; padding: 16px; background: var(--text); color: white; border: none; border-radius: 16px; font-size: 15px; font-weight: 700; margin-top: 10px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div id="appNotice" role="status" style="padding:12px 20px;background:#CCFBF1;" hidden></div>
+
+    <div class="header">
+        <h1>Непростопост</h1>
+        <div style="display:flex; gap:10px; align-items:center;">
+            <div style="font-size:20px; position:relative;">🔔<span style="position:absolute; top:0; right:0; width:8px; height:8px; background:red; border-radius:50%;"></span></div>
+            <div class="avatar" id="userAvatar">👤</div>
+        </div>
+    </div>
+
+    <!-- ГЛАВНАЯ -->
+    <div id="screen-dashboard" class="screen active container">
+        <div class="hero-card">
+            <div><p>В планере</p><h2 id="dashTasksCount">0</h2><p>задач и рассылок</p></div>
+            <div style="font-size: 30px;">→</div>
+        </div>
+        <div class="stats-row">
+            <div class="stat-item"><div class="stat-num" id="statGroups">0</div><div class="stat-name">Групп</div></div>
+            <div class="stat-item"><div class="stat-num" id="statClients">0</div><div class="stat-name">Клиентов</div></div>
+            <div class="stat-item"><div class="stat-num" style="color: #EF4444;" id="statOverdue">0</div><div class="stat-name">Просрочено</div></div>
+        </div>
+        <div class="section-title">Быстрые действия</div>
+        <div class="action-btn" onclick="switchTab('broadcast', document.querySelectorAll('.tab-item')[1])"><div class="action-icon">🚀</div><div class="action-text">Создать рассылку<div class="action-sub">В свои группы</div></div><div class="action-arrow">›</div></div>
+        <div class="action-btn" onclick="switchTab('clients', document.querySelectorAll('.tab-item')[2])"><div class="action-icon">📅</div><div class="action-text">Добавить клиента<div class="action-sub">В планер</div></div><div class="action-arrow">›</div></div>
+        <div class="action-btn" onclick="switchTab('catalog', document.querySelectorAll('.tab-item')[3])"><div class="action-icon">🏢</div><div class="action-text">Новый объект<div class="action-sub">В каталог</div></div><div class="action-arrow">›</div></div>
+        <div class="section-title" style="margin-top:25px;">Ближайшие касания <a href="#" onclick="switchTab('clients', document.querySelectorAll('.tab-item')[2])">Все</a></div>
+        <div id="dashboardTasks"></div>
+    </div>
+
+    <!-- РАССЫЛКИ -->
+    <div id="screen-broadcast" class="screen container">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+            <h2 style="margin:0; font-size:24px; font-weight:800;">Рассылки</h2>
+            <div style="width:36px; height:36px; background:var(--text); color:white; border-radius:50%; display:flex; align-items:center; justify-content:center; cursor:pointer;" onclick="document.getElementById('broadcastForm').style.display='block'">+</div>
+        </div>
+        <div class="form-group"><label for="groupId">ID группы MAX (бот должен быть администратором)</label><input id="groupId" placeholder="Например, -123456"></div><button class="btn-main" onclick="connectChat()">Подключить группу</button>
+        <div id="groupsList"></div>
+        <div class="section-title" style="margin-top:30px;">Рассылки</div>
+        <div id="broadcastJobs"></div>
+        <div id="broadcastForm" style="display:none; margin-top:20px; background:var(--card); padding:20px; border-radius:20px;">
+            <h3>Новая рассылка</h3>
+            <div class="form-group"><label>Группа</label><select id="chatSelect"></select></div>
+            <div class="form-group"><label>Текст</label><textarea id="adText" style="height:100px;"></textarea></div>
+            <div class="form-group"><label>Фото</label><input type="file" id="adImages" accept="image/jpeg,image/png,image/webp,image/gif" multiple></div>
+            <div class="form-group"><label>Дата и время отправки</label><input type="datetime-local" id="adRunAt" required></div><button class="btn-main" onclick="sendBroadcast()">Запланировать</button>
+        </div>
+    </div>
+
+    <!-- ПЛАНЕР -->
+    <div id="screen-clients" class="screen container">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+            <h2 style="margin:0; font-size:24px; font-weight:800;">Планер</h2>
+            <div style="display:flex; gap:15px; font-size:20px;">📅 <span style="font-weight:300;">+</span></div>
+        </div>
+        <p>Запланированные касания — время на вашем устройстве.</p>
+        <div id="clientsList"></div>
+        <button class="btn-main" style="margin-top:20px;" onclick="document.getElementById('addClientForm').style.display='block'">+ Добавить касание</button>
+        
+        <div id="addClientForm" style="display:none; margin-top:20px; background:var(--card); padding:20px; border-radius:20px;">
+            <h3>Новое касание</h3>
+            <div class="form-group"><label>Имя клиента</label><input type="text" id="clientName"></div>
+            <div class="form-group"><label>Номер телефона</label><input type="tel" id="clientPhone" placeholder="+7 900 000-00-00"></div>
+            <div class="form-group"><label>Действие</label><select id="clientType"><option>Звонок</option><option>Встреча</option><option>Сообщение</option></select></div>
+            <div class="form-group"><label>Детали</label><input type="text" id="clientText" placeholder="ЖК Иначе"></div>
+            <div class="form-group"><label>Дата и время</label><input type="date" id="clientDate"><input type="time" id="clientTime" style="margin-top:10px;"></div>
+            <button class="btn-main" onclick="addClient()">Сохранить</button>
+        </div>
+    </div>
+
+    <!-- КАТАЛОГ -->
+    <div id="screen-catalog" class="screen container">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+            <h2 style="margin:0; font-size:24px; font-weight:800;">Каталог</h2>
+            <div style="font-size:20px; cursor:pointer;" onclick="document.getElementById('addCatalogForm').style.display='block'">+</div>
+        </div>
+        <div class="form-group"><label for="catalogSearch">Поиск по объектам</label><input id="catalogSearch" type="search" oninput="renderCatalog()" placeholder="Название или адрес"></div>
+        <div id="catalogList"></div>
+        <div id="addCatalogForm" style="display:none; margin-top:20px; background:var(--card); padding:20px; border-radius:20px;">
+            <h3>Новый объект</h3>
+            <div class="form-group"><label>Название (ЖК)</label><input type="text" id="catTitle"></div>
+            <div class="form-group"><label>Адрес</label><input type="text" id="catAddress" placeholder="Краснодар, ул. Ленина"></div>
+            <div class="form-group"><label>Цена</label><input type="text" id="catPrice" placeholder="от 5 000 000 ₽"></div>
+            <div class="form-group"><label>Описание</label><textarea id="catDescription"></textarea></div><div class="form-group"><label>Тег</label><select id="catTag"><option>Новостройка</option><option>У моря</option><option>Бизнес-класс</option></select></div>
+            <div class="form-group"><label>Фото</label><input type="file" id="catImages" accept="image/jpeg,image/png,image/webp,image/gif" multiple></div>
+            <button class="btn-main" onclick="saveCatalogItem()">Сохранить</button>
+        </div>
+    </div>
+
+    <!-- ПРОФИЛЬ -->
+    <div id="screen-profile" class="screen container">
+        <div class="profile-head">
+            <div class="profile-avatar" id="profAvatar"></div>
+            <h2 class="profile-name" id="profName">Вход через MAX</h2>
+            <div class="profile-role">Риелтор</div>
+            <div class="pro-badge" id="subscriptionLabel">—</div>
+        </div>
+        <div class="profile-stats">
+            <div class="stat-item"><div class="stat-num" id="profGroups">0</div><div class="stat-name">Групп</div></div>
+            <div class="stat-item"><div class="stat-num" id="profClients">0</div><div class="stat-name">Клиентов</div></div>
+            <div class="stat-item"><div class="stat-num" id="profSubs">0</div><div class="stat-name">Подписчиков</div></div>
+        </div>
+        <div class="menu-list">
+            <div class="menu-item" onclick="switchTab('broadcast', document.querySelectorAll('.tab-item')[1])"><span class="menu-icon">👥</span> Мои группы <span class="menu-arrow">›</span></div>
+            <div class="menu-item">Касания сохраняются в планере. Push-уведомления не подключены.</div>
+            <div class="menu-item" onclick="alert('Оплата скоро будет доступна!')"><span class="menu-icon">💳</span> Реквизиты и оплата <span class="menu-arrow">›</span></div>
+            <div class="menu-item" onclick="alert('Откройте приложение из бота MAX. Для подключения группы добавьте бота администратором и укажите ID группы. Время отправки задаётся по часовому поясу устройства.')"><span class="menu-icon">❓</span> Помощь <span class="menu-arrow">›</span></div>
+        </div>
+        <button class="btn-logout" onclick="logout()">Выйти</button>
+    </div>
+
+    <!-- МЕНЮ -->
+    <div class="tab-bar">
+        <div class="tab-item active" onclick="switchTab('dashboard', this)"><span class="tab-icon">🏠</span>Главная</div>
+        <div class="tab-item" onclick="switchTab('broadcast', this)"><span class="tab-icon">🚀</span>Рассылки</div>
+        <div class="tab-item" onclick="switchTab('clients', this)"><span class="tab-icon">👥</span>Планер</div>
+        <div class="tab-item" onclick="switchTab('catalog', this)"><span class="tab-icon">📦</span>Каталог</div>
+        <div class="tab-item" onclick="switchTab('profile', this)"><span class="tab-icon">👤</span>Профиль</div>
+    </div>
+
+    <script src="/static/app.js" defer></script>
+</body>
+</html>
