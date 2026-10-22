@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 import requests
 import app as backend
+import max_events
 
 LOG = logging.getLogger('neprostopost.worker')
 
@@ -120,7 +121,11 @@ def run():
             db.execute("UPDATE app_jobs SET status='uncertain',last_error='Worker прервался. Проверьте доставку в MAX.' WHERE status='processing'")
             db.commit()
         LOG.info('Worker started')
+        next_poll=0
         while True:
+            if time.monotonic() >= next_poll:
+                max_events.poll_updates()
+                next_poll=time.monotonic()+5
             job = claim()
             if not job:
                 time.sleep(2)

@@ -15,6 +15,7 @@ os.environ['DATA_DIR'] = _temp.name
 os.environ['MAX_BOT_TOKEN'] = 'synthetic-test-key-not-a-real-token'
 import app
 import worker
+import max_events
 
 
 def signed(user_id=123, **changes):
@@ -30,7 +31,7 @@ class AppTests(unittest.TestCase):
     def setUp(self):
         self.client = app.app.test_client()
         with app.db() as db:
-            for table in ('app_jobs','app_groups','app_clients','app_catalog','app_sessions','app_users'):
+            for table in ('app_jobs','app_groups','app_clients','app_catalog','app_sessions','app_users','app_known_chats','app_bot_state'):
                 db.execute(f'DELETE FROM {table}')
             db.commit()
         response = self.client.post('/api/auth/max',json={'init_data':signed()})
@@ -139,28 +140,70 @@ class AppTests(unittest.TestCase):
         self.assertEqual(self.client.delete('/api/groups/-123',headers=self.auth).status_code,200)
         self.assertEqual(self.status(jid)['status'],'cancelled')
 
-    def test_group_discovery_only_lists_groups_administered_by_current_user(self):
-        payload={'chats':[
-            {'chat_id':-1,'title':'Моя группа','type':'chat'},
-            {'chat_id':-2,'title':'Чужая группа','type':'chat'},
-            {'chat_id':-3,'title':'Личный чат','type':'dialog'},
-            {'chat_id':-4,'title':'Недоступная группа','type':'chat'},
-        ],'marker':12345}
-        response=Mock(json=lambda:payload)
+    def test_group_discovery_uses_events_and_does_not_call_removed_endpoint(self):
+        with app.db() as db:
+            for cid,title in [('-1','Моя группа'),('-2','Чужая группа'),('-4','Недоступная группа')]:
+                db.execute('INSERT INTO app_known_chats VALUES(?,?,1,?)',(cid,title,app.iso(app.utcnow())))
+            db.commit()
         def permission(chat_id,user_id,timeout=25):
             self.assertEqual(user_id,'123')
-            return {-1:True,-2:False,-4:None}[chat_id]
+            return {'-1':True,'-2':False,'-4':None}[chat_id]
         self.assertEqual(self.client.get('/api/discover_chats').status_code,401)
-        with patch.object(app,'max_api',return_value=response) as call, patch.object(app,'get_admin_group',side_effect=permission):
-            result=self.client.get('/api/discover_chats?marker=100',headers=self.auth)
+        with patch.object(app,'max_api') as call, patch.object(app,'get_admin_group',side_effect=permission):
+            result=self.client.get('/api/discover_chats',headers=self.auth)
             self.assertEqual(result.status_code,200)
             self.assertEqual(result.json['chats'],[{'id':'-1','title':'Моя группа','connected':False}])
-            self.assertEqual(result.json['marker'],12345)
+            self.assertIsNone(result.json['marker'])
             self.assertEqual(result.json['unavailable_count'],1)
-            self.assertEqual(call.call_args.kwargs['params'],{'count':5,'marker':'100'})
+            call.assert_not_called()
         self.assertEqual(self.client.get('/api/discover_chats?marker=invalid',headers=self.auth).status_code,400)
+
+    def test_max_events_group_registration_and_persistent_marker(self):
+        payload={'updates':[
+            {'update_type':'message_created','message':{'recipient':{'chat_type':'chat','chat_id':-123},'body':{'text':'/connect'}}},
+            {'update_type':'message_created','message':{'recipient':{'chat_type':'dialog','chat_id':123}}},
+            {'update_type':'chat_title_changed','chat_id':-123,'title':'Моя группа'},
+            {'update_type':'message_created','message':None},
+        ],'marker':100}
+        with patch.object(app,'max_api',return_value=Mock(ok=True,json=lambda:payload)) as call:
+            self.assertTrue(max_events.poll_updates())
+            self.assertEqual(call.call_args.args,('GET','/updates'))
+        with app.db() as db:
+            rows=db.execute('SELECT * FROM app_known_chats').fetchall()
+            self.assertEqual(len(rows),1)
+            self.assertEqual(rows[0]['title'],'Моя группа')
+        self.assertEqual(max_events.state('updates_marker'),'100')
+        with patch.object(app,'max_api',return_value=Mock(ok=True,json=lambda:{'updates':[],'marker':101})) as call:
+            self.assertTrue(max_events.poll_updates())
+            self.assertEqual(call.call_args.kwargs['params']['marker'],'100')
         with patch.object(app,'max_api',side_effect=app.requests.Timeout):
-            self.assertEqual(self.client.get('/api/discover_chats',headers=self.auth).status_code,502)
+            self.assertFalse(max_events.poll_updates())
+        self.assertEqual(max_events.state('updates_marker'),'101')
+        self.assertIn('не дождался',max_events.state('updates_error'))
+
+    def test_max_events_removal_cancels_pending_jobs(self):
+        jid=self.add_job()
+        payload={'updates':[{'update_type':'bot_removed','chat_id':-123}], 'marker':1}
+        with patch.object(app,'max_api',return_value=Mock(ok=True,json=lambda:payload)):
+            self.assertTrue(max_events.poll_updates())
+        self.assertEqual(self.status(jid)['status'],'cancelled')
+        with app.db() as db:
+            self.assertEqual(db.execute('SELECT active FROM app_known_chats WHERE chat_id=?',('-123',)).fetchone()[0],0)
+
+    def test_max_events_failure_is_actionable_without_leaking_response(self):
+        with patch.object(app,'max_api',return_value=Mock(ok=False,status_code=401)):
+            self.assertFalse(max_events.poll_updates())
+        response=self.client.get('/api/discover_chats',headers=self.auth)
+        self.assertEqual(response.status_code,200)
+        self.assertIn('MAX отклонил токен',response.json['hint'])
+        self.assertNotIn(app.TOKEN,response.get_data(as_text=True))
+
+    def test_worker_polls_events_in_its_main_loop(self):
+        with patch.object(max_events,'poll_updates',return_value=True) as poll, \
+             patch.object(worker,'claim',return_value=None), \
+             patch.object(worker.time,'sleep',side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt): worker.run()
+            poll.assert_called_once()
 
     def test_upload_image_contract(self):
         name='a'*32+'.png'; (app.UPLOAD/name).write_bytes(b'fixture')

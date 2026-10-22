@@ -40,6 +40,8 @@ def init_db():
         c.execute('CREATE TABLE IF NOT EXISTS app_groups (owner_id TEXT NOT NULL, chat_id TEXT NOT NULL, title TEXT NOT NULL, PRIMARY KEY(owner_id,chat_id))')
         c.execute('CREATE TABLE IF NOT EXISTS app_jobs (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, chat_id TEXT NOT NULL, text TEXT NOT NULL, run_at TEXT NOT NULL, repeat_daily INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT "scheduled", images TEXT NOT NULL DEFAULT "[]")')
         c.execute('CREATE INDEX IF NOT EXISTS idx_app_jobs_due ON app_jobs(status,run_at)')
+        c.execute('CREATE TABLE IF NOT EXISTS app_known_chats (chat_id TEXT PRIMARY KEY, title TEXT, active INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL)')
+        c.execute('CREATE TABLE IF NOT EXISTS app_bot_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
         columns={r['name'] for r in c.execute('PRAGMA table_info(app_jobs)')}
         for name, declaration in [('attempts','INTEGER NOT NULL DEFAULT 0'), ('last_error','TEXT'), ('message_id','TEXT')]:
             if name not in columns: c.execute(f'ALTER TABLE app_jobs ADD COLUMN {name} {declaration}')
@@ -175,32 +177,42 @@ def chats():
 @require_auth
 def discover_chats():
     if not TOKEN: return jsonify(message='MAX_BOT_TOKEN не задан'),503
-    params={'count':5}
-    marker=request.args.get('marker')
-    if marker is not None:
-        if not re.fullmatch(r'\d{1,30}',marker): return jsonify(message='Некорректная страница списка'),400
-        params['marker']=marker
-    try:
-        response=max_api('GET','/chats',params=params,timeout=8)
-        response.raise_for_status()
-        payload=response.json()
-        candidates=payload['chats']
-        if not isinstance(candidates,list): raise ValueError('Invalid MAX chat list')
-    except (requests.RequestException,ValueError,KeyError,TypeError,RuntimeError):
-        return jsonify(message='Не удалось получить список групп от MAX. Попробуйте ещё раз.'),502
-    candidates=[chat for chat in candidates if isinstance(chat,dict)
-        and chat.get('type') != 'dialog' and chat.get('status') not in ('removed','left','closed')
-        and re.fullmatch(r'-?\d+',str(chat.get('chat_id','')))]
+    marker=request.args.get('marker','0')
+    if not re.fullmatch(r'\d{1,9}',marker): return jsonify(message='Некорректная страница списка'),400
+    offset=int(marker)
+    with db() as c:
+        rows=c.execute("""SELECT chat_id,MAX(title) AS title FROM (
+            SELECT chat_id,title FROM app_known_chats WHERE active=1
+            UNION ALL SELECT chat_id,title FROM app_groups WHERE owner_id=?
+            ) GROUP BY chat_id ORDER BY chat_id LIMIT 6 OFFSET ?""",(g.user_id,offset)).fetchall()
+        poll_error=c.execute("SELECT value FROM app_bot_state WHERE key='updates_error'").fetchone()
+        checked=c.execute("SELECT value FROM app_bot_state WHERE key='updates_checked_at'").fetchone()
+    candidates=[dict(row) for row in rows[:5]]
+    next_marker=offset+5 if len(rows)>5 else None
     user_id=g.user_id
     # Small pages and bounded parallel requests fit the web request timeout.
+    def check_candidate(chat):
+        allowed=get_admin_group(chat['chat_id'],user_id,timeout=8)
+        if allowed is True and not chat.get('title'):
+            try:
+                detail=max_api('GET',f"/chats/{chat['chat_id']}",timeout=5)
+                detail.raise_for_status()
+                title=detail.json().get('title')
+                if isinstance(title,str): chat['title']=title
+            except (requests.RequestException,ValueError,TypeError,AttributeError,RuntimeError):
+                pass
+        return allowed
     with ThreadPoolExecutor(max_workers=5) as pool:
-        permissions=list(pool.map(lambda chat: get_admin_group(chat['chat_id'],user_id,timeout=8),candidates))
+        permissions=list(pool.map(check_candidate,candidates))
     with db() as c:
         connected={r['chat_id'] for r in c.execute('SELECT chat_id FROM app_groups WHERE owner_id=?',(user_id,))}
     chats=[{'id':str(chat['chat_id']),'title':chat.get('title') or 'Группа '+str(chat['chat_id']),
             'connected':str(chat['chat_id']) in connected}
            for chat,allowed in zip(candidates,permissions) if allowed is True]
-    return jsonify(chats=chats,marker=payload.get('marker'),unavailable_count=permissions.count(None))
+    hint='Если группы нет, отправьте в нужную группу MAX команду /connect, подождите 10 секунд и повторите поиск.'
+    if poll_error and poll_error['value']: hint=poll_error['value']+' Проверьте журнал запуска worker на Ботхосте.'
+    elif not checked: hint='Ожидается получение событий. Отправьте /connect в группу и повторите поиск через 10 секунд. Если группа не появится, проверьте запуск python run.py на Ботхосте.'
+    return jsonify(chats=chats,marker=next_marker,unavailable_count=permissions.count(None),hint=hint)
 
 @app.post('/api/connect_chat')
 @require_auth

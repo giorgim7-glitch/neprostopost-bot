@@ -14,6 +14,10 @@ with tempfile.TemporaryDirectory(prefix='neprostopost-frontend-') as data:
     from unittest.mock import Mock
     app.get_admin_group = lambda chat_id, user_id, **kwargs: True
     app.max_api = lambda *args, **kwargs: Mock(ok=True, json=lambda: {'title':'Тестовая группа','chats':[{'chat_id':-123,'title':'Тестовая группа','type':'chat'}]})
+    import max_events
+    with app.db() as db:
+        max_events.remember(db,{'update_type':'message_created','message':{'recipient':{'chat_type':'chat','chat_id':-123}}})
+        db.commit()
     class QuietHandler(WSGIRequestHandler):
         def log_request(self, *args, **kwargs): pass
     server = make_server('127.0.0.1', 0, app.app, request_handler=QuietHandler)

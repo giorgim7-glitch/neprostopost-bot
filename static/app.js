@@ -81,6 +81,7 @@ async function findGroups(nextPage = false) {
         discoveryMarker = data.marker;
         const cards = data.chats.map(chat => `<div class="group-card"><div class="group-info"><div class="group-name">${escapeHTML(chat.title)}</div></div>${chat.connected ? '<span>Подключена</span>' : `<button data-connect="${escapeHTML(chat.id)}">Подключить</button>`}</div>`).join('');
         $('availableGroups').innerHTML = cards || '<p>На этой странице подходящих групп нет. Ваш аккаунт и бот должны быть администраторами группы.</p>';
+        if (data.hint) { const hint = document.createElement('p'); hint.textContent = data.hint; $('availableGroups').append(hint); }
         if (data.unavailable_count) $('availableGroups').insertAdjacentHTML('beforeend', '<p>MAX не подтвердил права в части групп. Попробуйте поиск ещё раз.</p>');
         if (discoveryMarker != null) {
             const more = document.createElement('button'); more.textContent = 'Следующие группы';
